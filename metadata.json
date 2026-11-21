@@ -1,0 +1,10 @@
+{
+  "name": "Veritas Lens",
+  "description": "AI image authenticity analyzer combining multimodal vision forensics, client-side EXIF inspection, Error Level Analysis, pixel zoom loupe, and side-by-side comparison.",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
