@@ -57,6 +57,16 @@ export async function loadFromFile(file: File, sourceType: SourceType = 'upload'
   };
 }
 
+async function safeReadJson<T>(response: Response): Promise<{ data: T | null; rawText: string }> {
+  const rawText = await response.text();
+  if (!rawText) return { data: null, rawText: '' };
+  try {
+    return { data: JSON.parse(rawText) as T, rawText };
+  } catch {
+    return { data: null, rawText };
+  }
+}
+
 export async function loadFromRemoteUrl(url: string): Promise<LoadedImageAsset> {
   const response = await fetch('/api/fetch-image', {
     method: 'POST',
@@ -64,15 +74,20 @@ export async function loadFromRemoteUrl(url: string): Promise<LoadedImageAsset> 
     body: JSON.stringify({ url }),
   });
 
-  const payload = (await response.json()) as {
+  const { data: payload } = await safeReadJson<{
     dataUrl?: string;
     mimeType?: string;
     fileName?: string;
     error?: string;
-  };
+  }>(response);
 
-  if (!response.ok || !payload.dataUrl) {
-    throw new Error(payload.error || 'Could not import image from the provided URL.');
+  if (!response.ok || !payload?.dataUrl) {
+    if (response.status === 404) {
+      throw new Error(
+        'Backend API route (/api/fetch-image) was not found. Make sure api/index.ts and vercel.json are deployed.'
+      );
+    }
+    throw new Error(payload?.error || `Could not import image from URL (HTTP ${response.status}).`);
   }
 
   const blob = dataUrlToBlob(payload.dataUrl);
@@ -154,12 +169,26 @@ export async function runServerAiAnalysis(
       body: payload,
     });
 
-    const data = (await response.json()) as AiAnalysisResponse & { error?: string };
-    if (response.ok) {
+    const { data, rawText } = await safeReadJson<AiAnalysisResponse & { error?: string }>(response);
+    if (response.ok && data) {
       return data;
     }
 
-    lastMessage = data.error || lastMessage;
+    if (response.status === 404) {
+      throw new Error(
+        'Backend API endpoint (/api/analyze) returned 404. Ensure api/index.ts and vercel.json are pushed and deployed.'
+      );
+    }
+    if (response.status === 413) {
+      throw new Error('Image payload exceeded the server request limit. Try a smaller image.');
+    }
+
+    lastMessage =
+      data?.error ||
+      (rawText.trim()
+        ? `Server returned HTTP ${response.status}: ${rawText.trim().slice(0, 140)}`
+        : `Forensic vision analysis failed (HTTP ${response.status}).`);
+
     const isTransient = response.status === 502 || response.status === 503 || response.status === 504;
     if (isTransient && attempt === 0) {
       await new Promise((resolve) => setTimeout(resolve, 1500));

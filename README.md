@@ -37,7 +37,7 @@
 
 ### Prerequisites
 - Node.js 18+
-- A Gemini API key (and optionally an OpenRouter API key for fallback)
+- A Google Gemini API key (and optionally an OpenRouter API key for fallback)
 
 ### Installation
 
@@ -45,3 +45,42 @@
 git clone <your-repo-url>
 cd <your-repo-name>
 npm install
+```
+
+### Environment Variables
+
+Create a `.env` file based on `.env.example`:
+
+```env
+GEMINI_API_KEY=your_gemini_api_key_here
+# Optional fallback provider
+OPENROUTER_API_KEY=your_openrouter_api_key_here
+```
+
+### Run Locally
+
+```bash
+# Development server (Express + Vite on port 3000)
+npm run dev
+
+# Type-check
+npm run lint
+
+# Production build & start
+npm run build
+npm start
+```
+
+## Deploying to Vercel
+
+This repository includes `vercel.json` and `api/index.ts` pre-configured for full-stack deployment on Vercel:
+
+1. Push the repository to GitHub (never commit `.env`).
+2. Import the repository at [vercel.com/new](https://vercel.com/new).
+3. Add `GEMINI_API_KEY` (and optionally `OPENROUTER_API_KEY`) under **Settings → Environment Variables**.
+4. Deploy and verify `/api/health` returns `{"status":"ok","geminiConfigured":true}`.
+
+## Privacy & Processing Notes
+
+- **EXIF parsing, XMP provenance extraction, ELA heatmaps, PDF generation, and scan history** run locally in your browser.
+- Multimodal vision inference is proxied securely through `/api/analyze` so API keys are never exposed to the client.

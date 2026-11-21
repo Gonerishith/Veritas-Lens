@@ -91,6 +91,37 @@ function sanitizeSharedReportBody(body: unknown): Record<string, unknown> | null
     };
   });
 
+  const rawProvenance = Array.isArray(rawMeta.provenance)
+    ? rawMeta.provenance.slice(0, 20)
+    : undefined;
+  const provenance = rawProvenance
+    ? rawProvenance.map((item, idx) => {
+        const p = (typeof item === 'object' && item !== null ? item : {}) as Record<
+          string,
+          unknown
+        >;
+        const kind =
+          p.kind === 'capture' ||
+          p.kind === 'digitized' ||
+          p.kind === 'edit' ||
+          p.kind === 'software_signature' ||
+          p.kind === 'export' ||
+          p.kind === 'ai_signature'
+            ? p.kind
+            : 'software_signature';
+        return {
+          id: safeServerStr(p.id, 40, `prov-${idx + 1}`),
+          kind,
+          signature: safeServerStr(p.signature, 120, 'Recorded signature'),
+          action: safeServerStr(p.action, 120, 'Metadata entry recorded'),
+          timestamp: typeof p.timestamp === 'string' ? safeServerStr(p.timestamp, 48) : undefined,
+          sourceTag: safeServerStr(p.sourceTag, 64, 'EXIF / XMP'),
+          details: typeof p.details === 'string' ? safeServerStr(p.details, 200) : undefined,
+          flagged: Boolean(p.flagged),
+        };
+      })
+    : undefined;
+
   const metadata = {
     fileName: safeServerStr(rawMeta.fileName, 120, 'shared-image.jpg'),
     mimeType: safeServerStr(rawMeta.mimeType, 40, 'image/jpeg'),
@@ -117,6 +148,7 @@ function sanitizeSharedReportBody(body: unknown): Record<string, unknown> | null
         ? safeServerStr(rawMeta.aiMarkerDetails, 240)
         : undefined,
     fields,
+    provenance,
   };
 
   let elaStats: Record<string, unknown> | null = null;
@@ -136,7 +168,8 @@ function sanitizeSharedReportBody(body: unknown): Record<string, unknown> | null
     rawReport.sourceType === 'upload' ||
     rawReport.sourceType === 'url' ||
     rawReport.sourceType === 'sample' ||
-    rawReport.sourceType === 'paste'
+    rawReport.sourceType === 'paste' ||
+    rawReport.sourceType === 'camera'
       ? rawReport.sourceType
       : 'upload';
 
@@ -664,18 +697,21 @@ function sanitizeAnalysisPayload(raw: Record<string, unknown>) {
   };
 }
 
-async function createApp() {
-  const app = express();
-  app.use(express.json({ limit: '16mb' }));
+function buildApiApp() {
+  const expressApp = express();
+  expressApp.use(express.json({ limit: '16mb' }));
 
-  app.get('/api/health', (_req: Request, res: Response) => {
+  const apiRouter = express.Router();
+
+  apiRouter.get('/health', (_req: Request, res: Response) => {
     res.json({
       status: 'ok',
       geminiConfigured: Boolean(process.env.GEMINI_API_KEY?.trim()),
+      openRouterConfigured: Boolean(process.env.OPENROUTER_API_KEY?.trim()),
     });
   });
 
-  app.post('/api/shares', async (req: Request, res: Response) => {
+  apiRouter.post('/shares', async (req: Request, res: Response) => {
     try {
       const clientIp = req.ip || req.socket.remoteAddress || 'unknown';
       if (!checkShareRateLimit(clientIp)) {
@@ -699,7 +735,7 @@ async function createApp() {
     }
   });
 
-  app.get('/api/shares/:id', async (req: Request, res: Response) => {
+  apiRouter.get('/shares/:id', async (req: Request, res: Response) => {
     const id = typeof req.params.id === 'string' ? req.params.id.trim() : '';
     if (!SAFE_SHARE_ID_REGEX.test(id)) {
       res.status(400).json({ error: 'Invalid share report identifier.' });
@@ -715,7 +751,7 @@ async function createApp() {
     res.json(record);
   });
 
-  app.post('/api/fetch-image', async (req: Request, res: Response) => {
+  apiRouter.post('/fetch-image', async (req: Request, res: Response) => {
     try {
       const rawUrl = typeof req.body?.url === 'string' ? req.body.url.trim() : '';
       if (!rawUrl || rawUrl.length > 2048) {
@@ -742,7 +778,7 @@ async function createApp() {
     }
   });
 
-  app.post('/api/analyze', async (req: Request, res: Response) => {
+  apiRouter.post('/analyze', async (req: Request, res: Response) => {
     try {
       const imageBase64 = typeof req.body?.imageBase64 === 'string' ? req.body.imageBase64.trim() : '';
       const mimeType = typeof req.body?.mimeType === 'string' ? req.body.mimeType.trim().toLowerCase() : '';
@@ -781,18 +817,32 @@ async function createApp() {
       let lastModelErr: unknown = null;
       let usedModel = '';
 
-      if (process.env.GEMINI_API_KEY?.trim()) {
+      const hasGeminiKey = Boolean(process.env.GEMINI_API_KEY?.trim());
+      const hasOpenRouterKey = Boolean(process.env.OPENROUTER_API_KEY?.trim());
+
+      if (!hasGeminiKey && !hasOpenRouterKey) {
+        res.status(503).json({
+          error:
+            'No vision API key is configured on the server. Add GEMINI_API_KEY (or OPENROUTER_API_KEY) to your server environment variables and redeploy.',
+        });
+        return;
+      }
+
+      if (hasGeminiKey) {
         const ai = getGeminiClient();
         const candidateModels: {
-          name: 'gemini-3.1-flash-lite' | 'gemini-4-hydrogen';
-          thinkingLevel: ThinkingLevel;
+          name: 'gemini-3.1-flash-lite' | 'gemini-4-hydrogen' | 'gemini-2.5-flash';
+          thinkingLevel?: ThinkingLevel;
           retries: number;
         }[] = [
-          { name: 'gemini-3.1-flash-lite', thinkingLevel: ThinkingLevel.MINIMAL, retries: 3 },
+          { name: 'gemini-3.1-flash-lite', thinkingLevel: ThinkingLevel.MINIMAL, retries: 2 },
           { name: 'gemini-4-hydrogen', thinkingLevel: ThinkingLevel.LOW, retries: 1 },
+          { name: 'gemini-2.5-flash', retries: 2 },
         ];
 
-        for (const candidate of candidateModels) {
+        for (let idx = 0; idx < candidateModels.length; idx++) {
+          const candidate = candidateModels[idx];
+          const hasNextCandidate = idx < candidateModels.length - 1 || hasOpenRouterKey;
           try {
             usedModel = candidate.name;
             const response = await callWithRetry(
@@ -816,9 +866,9 @@ async function createApp() {
                     systemInstruction: FORENSIC_SYSTEM_INSTRUCTION,
                     responseMimeType: 'application/json',
                     responseSchema: FORENSIC_RESPONSE_SCHEMA,
-                    thinkingConfig: {
-                      thinkingLevel: candidate.thinkingLevel,
-                    },
+                    ...(candidate.thinkingLevel
+                      ? { thinkingConfig: { thinkingLevel: candidate.thinkingLevel } }
+                      : {}),
                   },
                 }),
               candidate.retries
@@ -831,7 +881,16 @@ async function createApp() {
             console.info(
               `[api/analyze] fallback from ${candidate.name} after status=${errStatus || 'unknown'}`
             );
-            if (errStatus === 429 || errStatus === 500 || errStatus === 502 || errStatus === 503 || errStatus === 504 || errStatus === 404) {
+            if (
+              hasNextCandidate &&
+              (errStatus === 400 ||
+                errStatus === 404 ||
+                errStatus === 429 ||
+                errStatus === 500 ||
+                errStatus === 502 ||
+                errStatus === 503 ||
+                errStatus === 504)
+            ) {
               continue;
             }
             throw modelErr;
@@ -941,6 +1000,17 @@ async function createApp() {
     }
   });
 
+  expressApp.use('/api', apiRouter);
+  if (process.env.VERCEL) {
+    expressApp.use('/', apiRouter);
+  }
+
+  return expressApp;
+}
+
+export const app = buildApiApp();
+
+async function startStandaloneServer() {
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
@@ -961,7 +1031,11 @@ async function createApp() {
   });
 }
 
-createApp().catch((err) => {
-  console.error('Failed to start Veritas Lens server:', err);
-  process.exit(1);
-});
+if (!process.env.VERCEL) {
+  startStandaloneServer().catch((err) => {
+    console.error('Failed to start Veritas Lens server:', err);
+    process.exit(1);
+  });
+}
+
+export default app;
