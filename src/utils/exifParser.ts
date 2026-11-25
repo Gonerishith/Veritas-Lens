@@ -1003,8 +1003,8 @@ export async function parseImageMetadata(
 
 export function buildMetadataContextForAi(meta: ImageMetadata): string {
   const lines = [
-    `File: ${meta.fileName} (${meta.mimeType}, ${meta.width}x${meta.height}, ${formatBytes(meta.fileSize)})`,
-    `Camera EXIF present: ${meta.hasExif ? 'Yes' : 'No'}`,
+    `File: ${meta.fileName} (${meta.mimeType}, ${meta.width}x${meta.height}, aspect ${meta.aspectRatio}, ${formatBytes(meta.fileSize)})`,
+    `Camera EXIF present: ${meta.hasExif ? 'Yes' : 'No (normal for images downloaded from social media, messaging apps, or screenshots)'}`,
   ];
   if (meta.cameraMake || meta.cameraModel) {
     lines.push(`Camera: ${[meta.cameraMake, meta.cameraModel].filter(Boolean).join(' ')}`);

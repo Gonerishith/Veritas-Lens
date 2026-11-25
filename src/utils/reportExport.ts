@@ -7,8 +7,10 @@ export function formatVerdictLabel(verdict: VerdictType): string {
       return 'Likely AI-Generated';
     case 'likely_real':
       return 'Likely Authentic';
+    case 'possible_manipulation':
+      return 'Possible AI-Manipulation';
     default:
-      return 'Inconclusive / Edited';
+      return 'Inconclusive / Mixed';
   }
 }
 

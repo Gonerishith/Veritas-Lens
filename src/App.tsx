@@ -290,7 +290,11 @@ export default function App() {
         clientRes.preparedBase64,
         clientRes.preparedMimeType,
         clientRes.metadata,
-        clientRes.elaStats
+        clientRes.elaStats,
+        {
+          detailCropBase64: clientRes.detailCropBase64,
+          detailCropRegion: clientRes.detailCropRegion,
+        }
       );
       if (seq !== scanSequenceRef.current) return;
 
@@ -460,7 +464,11 @@ export default function App() {
         clientRes.preparedBase64,
         clientRes.preparedMimeType,
         clientRes.metadata,
-        clientRes.elaStats
+        clientRes.elaStats,
+        {
+          detailCropBase64: clientRes.detailCropBase64,
+          detailCropRegion: clientRes.detailCropRegion,
+        }
       );
       const report = assembleForensicReport(asset, clientRes, aiRes);
 
@@ -658,7 +666,11 @@ export default function App() {
             clientRes.preparedBase64,
             clientRes.preparedMimeType,
             clientRes.metadata,
-            clientRes.elaStats
+            clientRes.elaStats,
+            {
+              detailCropBase64: clientRes.detailCropBase64,
+              detailCropRegion: clientRes.detailCropRegion,
+            }
           );
           if (batchRunIdRef.current !== runId) return;
 

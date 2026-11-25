@@ -1,4 +1,4 @@
-export type VerdictType = 'likely_ai' | 'inconclusive' | 'likely_real';
+export type VerdictType = 'likely_ai' | 'likely_real' | 'possible_manipulation' | 'inconclusive';
 export type ConfidenceLevel = 'high' | 'medium' | 'low';
 export type SignalStatus = 'authentic' | 'caution' | 'synthetic';
 export type SourceType = 'upload' | 'url' | 'sample' | 'paste' | 'camera';
@@ -80,6 +80,8 @@ export interface ElaStats {
 }
 
 export interface AiAnalysisResponse {
+  authenticEvidence?: string[];
+  syntheticEvidence?: string[];
   verdict: VerdictType;
   aiProbability: number;
   confidence: ConfidenceLevel;

@@ -461,29 +461,17 @@ async function fetchImageSafely(rawUrl: string): Promise<{
 const FORENSIC_RESPONSE_SCHEMA = {
   type: Type.OBJECT,
   properties: {
-    verdict: {
-      type: Type.STRING,
-      description: 'Overall authenticity classification: "likely_ai", "inconclusive", or "likely_real".',
+    authenticEvidence: {
+      type: Type.ARRAY,
+      description:
+        '2 to 4 concrete visual or physical observations supporting that this could be a REAL camera/smartphone photograph (e.g., coherent real-world clutter, legible brand/sign text, natural everyday candid lighting, consistent mechanical/clothing details, real smartphone HDR/bokeh/JPEG compression).',
+      items: { type: Type.STRING },
     },
-    aiProbability: {
-      type: Type.INTEGER,
-      description: 'Calibrated integer from 0 (definitely real photograph) to 100 (definitely AI-generated / synthetic).',
-    },
-    confidence: {
-      type: Type.STRING,
-      description: 'Analyst confidence level: "high", "medium", or "low".',
-    },
-    headline: {
-      type: Type.STRING,
-      description: 'Concise 1-sentence forensic conclusion in plain, objective English.',
-    },
-    summary: {
-      type: Type.STRING,
-      description: '2-3 sentence technical synthesis weighing both visual cues and metadata context.',
-    },
-    suspectedSource: {
-      type: Type.STRING,
-      description: 'Brief classification such as "Natural Optical Capture", "Modern Diffusion Model", "3D / CGI Rendering", "AI-Edited Photograph", or "Undetermined".',
+    syntheticEvidence: {
+      type: Type.ARRAY,
+      description:
+        '0 to 4 concrete, specific generative AI artifacts visible in the image (e.g., garbled text/emblems, broken spoke/lug-nut symmetry, impossible jewelry/eyeglass merging, paradoxical razor-sharp edges paired with waxy diffusion skin, nonsensical melted background objects). Leave empty if no genuine AI artifacts exist.',
+      items: { type: Type.STRING },
     },
     signals: {
       type: Type.ARRAY,
@@ -508,6 +496,31 @@ const FORENSIC_RESPONSE_SCHEMA = {
         },
         required: ['id', 'name', 'status', 'score', 'observation'],
       },
+    },
+    aiProbability: {
+      type: Type.INTEGER,
+      description:
+        'Calibrated integer from 0 (definitely real camera photograph) to 100 (definitely AI-generated / CGI), weighed neutrally after comparing authenticEvidence against syntheticEvidence.',
+    },
+    verdict: {
+      type: Type.STRING,
+      description: 'Overall authenticity classification: "likely_ai", "inconclusive", or "likely_real".',
+    },
+    confidence: {
+      type: Type.STRING,
+      description: 'Analyst confidence level: "high", "medium", or "low".',
+    },
+    headline: {
+      type: Type.STRING,
+      description: 'Concise 1-sentence forensic conclusion in plain, objective English.',
+    },
+    summary: {
+      type: Type.STRING,
+      description: '2-3 sentence technical synthesis weighing both visual cues and metadata context.',
+    },
+    suspectedSource: {
+      type: Type.STRING,
+      description: 'Brief classification such as "Natural Optical Capture", "Smartphone Computational Photo", "Modern Diffusion Model", "3D / CGI Rendering", "AI-Edited Photograph", or "Undetermined".',
     },
     regions: {
       type: Type.ARRAY,
@@ -536,50 +549,74 @@ const FORENSIC_RESPONSE_SCHEMA = {
       },
     },
   },
-  required: [
-    'verdict',
+  propertyOrdering: [
+    'authenticEvidence',
+    'syntheticEvidence',
+    'signals',
     'aiProbability',
+    'verdict',
     'confidence',
     'headline',
     'summary',
     'suspectedSource',
+    'regions',
+  ],
+  required: [
+    'authenticEvidence',
+    'syntheticEvidence',
     'signals',
+    'aiProbability',
+    'verdict',
+    'confidence',
+    'headline',
+    'summary',
+    'suspectedSource',
     'regions',
   ],
 };
 
-const FORENSIC_SYSTEM_INSTRUCTION = `You are a principal digital image forensic analyst specializing in distinguishing authentic camera photographs from modern AI-generated images (Flux, Midjourney, Imagen, DALL-E, Stable Diffusion) and 3D/CGI renders.
+const FORENSIC_SYSTEM_INSTRUCTION = `You are a neutral, highly calibrated digital image forensic analyst. Your job is to accurately separate REAL camera/smartphone photographs from AI-generated (diffusion/GAN) images and 3D/CGI renders with BOTH low false positives (never falsely flagging real photos as AI) AND low false negatives (catching modern photorealistic AI images).
 
-Evaluate the image objectively with strict scientific discipline. Do NOT default to calling polished photos AI, and do NOT assume a photorealistic image is real without verifying fine physical and geometric details.
+STEP 1 — MANDATORY NEUTRAL BASELINE & REAL-WORLD PHOTOGRAPHY AWARENESS:
+Most everyday images uploaded by users are REAL smartphone or DSLR photos shared via WhatsApp, Instagram, X, Facebook, or screenshots. Before suspecting AI, remember what is 100% NORMAL in real photographs and MUST NEVER be counted as AI evidence:
+- Missing EXIF metadata (social media, messaging apps, web downloads, and screenshots ALWAYS strip EXIF from real photos).
+- Smartphone computational photography: iPhone/Pixel/Samsung/Xiaomi Portrait Mode cutout bokeh around hair/shoulders, multi-frame night denoising (smooth skin/walls/sky), HDR tone-mapping, and built-in smartphone beauty/skin-smoothing filters.
+- Social-media JPEG recompression: soft micro-detail, low noise residual, slightly mushy distant foliage or small distant text.
+- Professional DSLR / editorial photography: clean studio lighting, CPL polarizing filters on glossy cars, Lightroom/Photoshop color grading, shallow f/1.4–f/2.8 lens bokeh.
+- Everyday candid realism: slightly awkward or mundane composition, ordinary unglamorous lighting, real-world background clutter, real readable text/logos/brands, authentic clothing wrinkles, natural messy hair, and imperfect human faces/bodies.
 
-Perform a systematic multi-domain inspection across these 6 forensic channels:
-1. Lighting & Shadow Physics ("lighting") — Light source directionality, tire/object ambient-occlusion contact shadows on ground surfaces, specular reflections, caustics, and multi-source shadow coherence.
-2. Anatomy, Text & Geometry ("anatomy_geometry") — Human hands/fingers/eyes/teeth/ears, architectural straight lines, readable signage/typography, and mechanical/vehicular structural logic (see Vehicle Protocol below).
-3. Surface Texture & Micro-Detail ("texture") — Authentic optical sensor/film micro-grain, subtle paint orange-peel/imperfections, fabric weave, skin pores, and foliage randomness vs. hyper-smooth liquid-plastic diffusion surfaces, painterly smears, or repeating synthetic micro-patterns.
-4. Background & Spatial Coherence ("background") — Continuity of horizons/fences/curbs behind foreground objects, reflections in glass/paint/mirrors matching actual surroundings, perspective vanishing points, and coherence of distant vehicles, pedestrians, and street signs.
-5. Optical & Lens Characteristics ("optics") — Physically progressive depth-of-field gradient, realistic lens flare/chromatic aberration, natural specular bokeh shapes, and genuine motion blur vs. uniform synthetic blur or inconsistent focal planes.
-6. Noise, Grain & Compression ("noise_compression") — Luminance/chroma sensor noise continuity across shadows and highlights, absence of synthetic edge halos, quantitative ELA compression cues, and EXIF/XMP/C2PA provenance evidence when provided.
+STEP 2 — WHAT ACTUALLY SEPARATES TRUE AI GENERATION FROM REAL PHOTOS:
+List concrete evidence for BOTH sides (authenticEvidence vs. syntheticEvidence) before scoring. Look closely at Image 1 (full frame) and Image 2 (1:1 micro-detail crop, when provided):
 
-CRITICAL VEHICLE & AUTOMOTIVE FORENSIC PROTOCOL (apply rigorously whenever cars, motorcycles, trucks, or machinery appear):
-- Emblems, Badges & Typography: Inspect hood, grille, fender, trunk, and wheel center-cap logos, brake caliper branding, tire sidewall molded lettering/numbers, and license plate fonts/kerning/stamps. Authentic camera captures preserve real manufacturer emblems and consistent lettering (or exhibit natural optical defocus/motion blur); AI generators frequently distort logos into uncanny pseudo-emblems, melt license plate characters into pseudo-glyphs, or smear molded tire text unevenly.
-- Wheels, Spokes, Lug Nuts & Brakes: Count wheel spokes for exact rotational symmetry; verify lug-nut count and concentric spacing (typically 5 evenly spaced); verify brake rotors and calipers sit physically behind spokes; verify front and rear wheel rims match in design. AI car renders often show irregular spoke spacing, mismatched lug-nut counts, warped brake calipers, or subtly different front vs. rear wheel designs.
-- Body Panel Gaps, Trim & Headlight Internals: Trace hood, fender, door, and bumper shutlines for crisp, engineered seams (AI often blurs, fades, or randomly terminates panel seams). Inspect headlight internal projectors/DRL emitters, grille mesh cell uniformity, windshield wipers, cowl vents, door handles, and side-mirror mounts for true mechanical symmetry vs. melted greebles.
-- Paint Clearcoat Reflections & Cabin Glass: Verify curved clearcoat reflections accurately mirror actual sky, trees, buildings, poles, road lines, or studio softboxes without surreal liquid warping. Inspect visible cabin interiors through glass (steering wheel, seats, headrests, pillars, mirrors) for physically coherent placement.
-- Tire-to-Ground Contact: Verify realistic dark contact shadows where rubber meets pavement, natural tire sidewall compression, and physically believable wheel-well suspension geometry.
+A. Strong Authentic Real-Photo Cues:
+- Everyday candid/unposed lighting, natural real-world clutter, messy/unbalanced composition, or genuine camera/lens quirks (motion blur, natural ISO grain, realistic flare).
+- Crisp, coherent, real-world readable text, signs, brand logos, manufacturer car emblems, license plates, or product packaging that hold up under close inspection.
+- Consistent fine mechanical/clothing structure: matching earrings, continuous jewelry chains, proper buttons/zippers/seams, symmetrical car wheel spokes & lug nuts, coherent brake assemblies, and physically consistent background geometry.
+- Natural human authenticity: asymmetrical facial features, authentic uneven skin texture/creases/blemishes/peach fuzz, or normal smartphone JPEG/Portrait-Mode rendering on a genuine real-world scene.
+- Verified camera EXIF/provenance tags (strong supporting cue when visual content agrees).
 
-ANTI-FALSE-POSITIVE CALIBRATION (Real Commercial, Editorial & Edited Photography):
-- Real automotive and commercial photography (shot on DSLR/mirrorless cameras with circular polarizing CPL filters, rolling-shot camera rigs, studio strobes, or Lightroom/Photoshop grading) routinely has spotless paint, dramatic sunset/studio lighting, deep reflections, shallow bokeh, and NO EXIF metadata (social media platforms, messaging apps, and websites strip EXIF automatically).
-- NEVER classify an image as "likely_ai" (aiProbability >= 65) solely because it looks glossy, cinematic, dramatically lit, color-graded, or lacks EXIF metadata.
-- To score aiProbability >= 65 ("likely_ai"), cite concrete, observable visual impossibilities or synthetic artifacts (such as warped emblems/badges, garbled text/license plates, asymmetric spokes/lug nuts, melted grille/headlight internals, broken panel seams, contradictory reflections, anatomical errors, or explicit AI generator container markers).
-- Conversely, NEVER score an image "likely_real" (aiProbability <= 35) on overall vibe alone — actively verify fine micro-details (badges, wheels, lettering, reflections, seams, background text/objects) first.
-- If an image is heavily compressed, low-resolution, or heavily post-processed with mixed cues and no decisive physical impossibility, calibrate honestly into the "inconclusive" band (36..64) with "low" or "medium" confidence.
+B. Genuine AI-Generation Signatures (distinct from normal phone smoothing or JPEG compression!):
+1. Structural, Text & Mechanical Contradictions:
+   - In-focus text, signs, logos, car badges, tire sidewall text, or license plates rendered as garbled pseudo-letters/alien symbols (NOT merely out-of-focus or low-res JPEG blur).
+   - Physical geometry failures: eyeglasses/jewelry merging into skin, left vs. right earrings having totally different structures, clothing straps/seams/buttons disappearing into nothing, car spokes/lug nuts breaking rotational symmetry, mismatched front/rear wheels, panel gaps fading randomly into paint, background lines shifting angle behind a subject.
+   - Impossible reflections or warped anatomy: reflections in mirrors/glasses/car paint depicting an impossible scene, fused teeth, malformed fingers/ears/limbs.
+2. Modern Photorealistic Diffusion Signatures (Flux, Midjourney v6+, Imagen, GPT-Image — when NO gross deformity exists):
+   - Paradoxical "Hyper-Sharp + Waxy Plasticity": Unlike phone denoising or JPEG blur (which softens the whole photo evenly), AI diffusion portraits often combine razor-sharp hyper-rendered eyelashes/lips/edges with surreal, uniformly glowing airbrushed/waxy skin across face/neck/shoulders, overly luminous jewel-like irises, and ribbon-like glossy hair strands that loop impossibly or dissolve smoothly into background bokeh.
+   - Semantic Background Melting: Out-of-focus background objects (buildings, furniture, distant cars, crowds, street signs) morph into nonsensical impossible shapes rather than real optical lens blur.
+   - "Prompted Hyper-Perfection" + Localized Micro-Anomalies: Unnaturally idealized symmetrical "AI model" face + hyper-balanced cinematic rim lighting + ultra-glossy uniform aesthetic COMBINED with at least 2 concrete localized micro-anomalies (e.g., mismatched catchlights, fused chain/earring details, impossible hair loops, warped clothing weave, melted background objects, or garbled micro-text).
+
+STEP 3 — CALIBRATED SCORING DISCIPLINE:
+Weigh authenticEvidence vs. syntheticEvidence honestly BEFORE setting aiProbability (0..100):
+- Score 5..30 ("likely_real"): The scene looks like a genuine camera/smartphone photograph with real-world coherence and ZERO clear generative contradictions — EVEN IF it has no EXIF, smartphone Portrait Mode bokeh, phone beauty smoothing, JPEG compression, or professional studio lighting!
+- Score 70..96 ("likely_ai"): Clear structural/text/geometry impossibilities OR explicit AI container markers OR multiple concrete, verifiable diffusion portrait/vehicle signatures (paradoxical hyper-sharp waxy plasticity + localized micro-anomalies in eyes/hair/jewelry/emblems/background) that clearly outweigh authentic cues.
+- Score 38..62 ("inconclusive"): Evidence is genuinely split (e.g., heavily FaceTuned/Photoshopped real photo, extreme low-res thumbnail, or ambiguous studio shot with weak/conflicting cues).
 
 Output Rules:
-- Return strictly valid JSON conforming to the provided schema.
+- Fill authenticEvidence and syntheticEvidence objectively first, then the 6 signals, then aiProbability and verdict.
 - Provide exactly 6 signals using IDs: "lighting", "anatomy_geometry", "texture", "background", "optics", "noise_compression".
-- Calibrate aiProbability (0..100) consistently with your signal scores and evidence: >= 65 => "likely_ai", 36..64 => "inconclusive", <= 35 => "likely_real".
-- Provide 2 to 5 precise bounding boxes in box_2d [ymin, xmin, ymax, xmax] (0..1000) highlighting concrete visible evidence (e.g., wheel lug nuts/spokes, front grille emblem, license plate typography, clearcoat reflection seam, headlight optics, hand grip, or natural sensor grain).
-- Keep prose concise, neutral, technical, and strictly grounded in details visible in the image.`;
+- Ensure aiProbability aligns with the 6 signals and thresholds: >= 65 => "likely_ai", 36..64 => "inconclusive", <= 35 => "likely_real".
+- Provide 2 to 5 accurate box_2d [ymin, xmin, ymax, xmax] (0..1000) regions relative to Image 1 pointing to concrete visible evidence.
+- Keep prose concise, neutral, and strictly grounded in what is actually visible.`;
 
 function extractErrorStatus(err: unknown): number {
   if (typeof err === 'object' && err !== null) {
@@ -621,10 +658,7 @@ async function callWithRetry<T>(fn: () => Promise<T>, maxRetries = 3): Promise<T
 
 function sanitizeAnalysisPayload(raw: Record<string, unknown>) {
   const rawProb = typeof raw.aiProbability === 'number' ? raw.aiProbability : 50;
-  const aiProbability = Math.max(0, Math.min(100, Math.round(rawProb)));
-
-  const verdict: 'likely_ai' | 'inconclusive' | 'likely_real' =
-    aiProbability >= 65 ? 'likely_ai' : aiProbability <= 35 ? 'likely_real' : 'inconclusive';
+  let aiProbability = Math.max(0, Math.min(100, Math.round(rawProb)));
 
   const confidence: 'high' | 'medium' | 'low' =
     raw.confidence === 'high' || raw.confidence === 'medium' || raw.confidence === 'low'
@@ -648,6 +682,46 @@ function sanitizeAnalysisPayload(raw: Record<string, unknown>) {
           : 'No anomaly details recorded for this channel.',
     };
   });
+
+  const rawAuthentic = Array.isArray(raw.authenticEvidence) ? raw.authenticEvidence.map(String) : [];
+  const rawSynthetic = Array.isArray(raw.syntheticEvidence) ? raw.syntheticEvidence.map(String) : [];
+
+  // Reconcile headline probability if it strongly contradicts the 6 channel scores
+  if (signals.length >= 4) {
+    const avgSignal =
+      signals.reduce((acc, s) => acc + s.score, 0) / signals.length;
+    const highSyntheticCount = signals.filter((s) => s.score >= 65).length;
+    const highAuthenticCount = signals.filter((s) => s.score <= 35).length;
+
+    if (highSyntheticCount >= 3 && aiProbability < avgSignal - 12) {
+      aiProbability = Math.round(aiProbability * 0.4 + avgSignal * 0.6);
+    } else if (highAuthenticCount >= 4 && aiProbability > avgSignal + 15) {
+      aiProbability = Math.round(aiProbability * 0.4 + avgSignal * 0.6);
+    } else if (Math.abs(aiProbability - avgSignal) > 22) {
+      aiProbability = Math.round(aiProbability * 0.55 + avgSignal * 0.45);
+    }
+    aiProbability = Math.max(0, Math.min(100, aiProbability));
+  }
+
+  let verdict: 'likely_ai' | 'likely_real' | 'possible_manipulation' | 'inconclusive' = 'inconclusive';
+  if (
+    raw.verdict === 'likely_ai' ||
+    raw.verdict === 'likely_real' ||
+    raw.verdict === 'possible_manipulation' ||
+    raw.verdict === 'inconclusive'
+  ) {
+    verdict = raw.verdict;
+  } else if (aiProbability >= 70) {
+    verdict = 'likely_ai';
+  } else if (aiProbability <= 30) {
+    verdict = 'likely_real';
+  } else if (aiProbability >= 40 && aiProbability <= 65 && rawSynthetic.length > 0) {
+    verdict = 'possible_manipulation';
+  } else if (aiProbability >= 65) {
+    verdict = 'likely_ai';
+  } else if (aiProbability <= 35) {
+    verdict = 'likely_real';
+  }
 
   const rawRegions = Array.isArray(raw.regions) ? raw.regions : [];
   const regions = rawRegions
@@ -686,6 +760,8 @@ function sanitizeAnalysisPayload(raw: Record<string, unknown>) {
     .filter((item): item is NonNullable<typeof item> => item !== null);
 
   return {
+    authenticEvidence: rawAuthentic,
+    syntheticEvidence: rawSynthetic,
     verdict,
     aiProbability,
     confidence,
@@ -791,9 +867,21 @@ function buildApiApp() {
     try {
       const imageBase64 = typeof req.body?.imageBase64 === 'string' ? req.body.imageBase64.trim() : '';
       const mimeType = typeof req.body?.mimeType === 'string' ? req.body.mimeType.trim().toLowerCase() : '';
+      const detailCropBase64 =
+        typeof req.body?.detailCropBase64 === 'string' &&
+        req.body.detailCropBase64.trim().length > 0 &&
+        req.body.detailCropBase64.trim().length <= 1_000_000
+          ? req.body.detailCropBase64.trim()
+          : '';
+      const detailCropRegion =
+        Array.isArray(req.body?.detailCropRegion) &&
+        req.body.detailCropRegion.length === 4 &&
+        req.body.detailCropRegion.every((v: unknown) => typeof v === 'number' && Number.isFinite(v))
+          ? (req.body.detailCropRegion as [number, number, number, number])
+          : null;
       const metadataContext =
         typeof req.body?.metadataContext === 'string'
-          ? req.body.metadataContext.slice(0, 3000)
+          ? req.body.metadataContext.slice(0, 3500)
           : '';
 
       if (!imageBase64 || imageBase64.length > MAX_BASE64_LENGTH) {
@@ -810,17 +898,24 @@ function buildApiApp() {
         return;
       }
 
+      const cropNotice = detailCropBase64
+        ? `TWO IMAGES ARE ATTACHED:\n- Image 1: Full-frame composition (compute all box_2d bounding-box coordinates [ymin, xmin, ymax, xmax] in 0..1000 relative to Image 1).\n- Image 2: Unscaled 1:1 native-resolution micro-detail crop from Image 1 region ${detailCropRegion ? `[${detailCropRegion.join(', ')}]` : 'around the primary subject'} for crisp inspection of fine texture, text, edges, and optics.`
+        : 'Inspect the full image carefully for both authentic photographic cues and any genuine generative AI artifacts.';
+
       const promptParts = [
-        'Perform a deep digital forensic authenticity examination of this image to determine whether it is AI-generated/CGI or an authentic camera photograph.',
-        'Inspect micro-level physical evidence carefully: if a vehicle/car is present, explicitly examine manufacturer emblems/badges, license plate typography, wheel spoke symmetry and lug-nut counts, brake rotors/calipers, tire sidewall lettering, body panel shutlines, headlight internals, paint clearcoat reflections, and cabin interior through glass. Distinguish genuine commercial/CPL-filtered/edited photography from diffusion synthesis by requiring concrete physical, typographic, or geometric impossibilities before flagging Likely AI.',
+        'Perform an objective, neutrally calibrated digital forensic examination of this image to determine whether it is a real camera/smartphone photograph or an AI-generated/CGI image.',
+        cropNotice,
+        'Weigh authenticEvidence (real-world coherence, natural everyday lighting/imperfections, readable text/logos, normal smartphone HDR/Portrait-Mode/JPEG artifacts) fairly against syntheticEvidence (concrete generative contradictions, garbled text/emblems, impossible geometry, or paradoxical hyper-sharp + waxy diffusion texture with localized micro-anomalies). Do NOT penalize ordinary real photos for lacking EXIF, having phone smoothing/bokeh, or social-media compression.',
         metadataContext
-          ? `Client-side container, EXIF & ELA inspection summary:\n${metadataContext}`
-          : 'No camera EXIF metadata was present in the file container (remember: social platforms and websites routinely strip EXIF from real photos).',
-        'Return the complete structured JSON forensic report with all 6 signals and 2-5 localized bounding boxes grounded in concrete visible features.',
+          ? `Client-side container, EXIF & ELA summary:\n${metadataContext}`
+          : 'No camera EXIF metadata was present in the file container (normal for social media downloads and screenshots).',
+        'Return the complete structured JSON forensic report with authenticEvidence, syntheticEvidence, all 6 signals, calibrated aiProbability, verdict, and 2-5 localized bounding boxes relative to Image 1.',
       ].join('\n\n');
 
       const startedAt = Date.now();
-      console.log(`[api/analyze] start mime=${mimeType} base64Len=${imageBase64.length}`);
+      console.log(
+        `[api/analyze] start mime=${mimeType} base64Len=${imageBase64.length} detailCrop=${Boolean(detailCropBase64)}`
+      );
 
       let rawText = '';
       let lastModelErr: unknown = null;
@@ -836,6 +931,26 @@ function buildApiApp() {
         });
         return;
       }
+
+      const geminiParts: Array<
+        { inlineData: { mimeType: string; data: string } } | { text: string }
+      > = [
+        {
+          inlineData: {
+            mimeType,
+            data: imageBase64,
+          },
+        },
+      ];
+      if (detailCropBase64) {
+        geminiParts.push({
+          inlineData: {
+            mimeType: 'image/jpeg',
+            data: detailCropBase64,
+          },
+        });
+      }
+      geminiParts.push({ text: promptParts });
 
       if (hasGeminiKey) {
         const ai = getGeminiClient();
@@ -859,17 +974,7 @@ function buildApiApp() {
                 ai.models.generateContent({
                   model: candidate.name,
                   contents: {
-                    parts: [
-                      {
-                        inlineData: {
-                          mimeType,
-                          data: imageBase64,
-                        },
-                      },
-                      {
-                        text: promptParts,
-                      },
-                    ],
+                    parts: geminiParts,
                   },
                   config: {
                     systemInstruction: FORENSIC_SYSTEM_INSTRUCTION,
@@ -910,9 +1015,24 @@ function buildApiApp() {
       // Optional server-side OpenRouter fallback if configured in Settings > Secrets
       if (!rawText && process.env.OPENROUTER_API_KEY?.trim()) {
         usedModel = 'openrouter:google/gemini-2.5-flash';
+        const openRouterContent: Array<
+          { type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } }
+        > = [
+          { type: 'text', text: promptParts },
+          {
+            type: 'image_url',
+            image_url: { url: `data:${mimeType};base64,${imageBase64}` },
+          },
+        ];
+        if (detailCropBase64) {
+          openRouterContent.push({
+            type: 'image_url',
+            image_url: { url: `data:image/jpeg;base64,${detailCropBase64}` },
+          });
+        }
         const orRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
           method: 'POST',
-          signal: AbortSignal.timeout(30000),
+          signal: AbortSignal.timeout(35000),
           headers: {
             Authorization: `Bearer ${process.env.OPENROUTER_API_KEY.trim()}`,
             'Content-Type': 'application/json',
@@ -925,13 +1045,7 @@ function buildApiApp() {
               { role: 'system', content: FORENSIC_SYSTEM_INSTRUCTION },
               {
                 role: 'user',
-                content: [
-                  { type: 'text', text: promptParts },
-                  {
-                    type: 'image_url',
-                    image_url: { url: `data:${mimeType};base64,${imageBase64}` },
-                  },
-                ],
+                content: openRouterContent,
               },
             ],
           }),

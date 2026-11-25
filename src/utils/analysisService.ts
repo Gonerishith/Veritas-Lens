@@ -126,6 +126,8 @@ export interface ClientForensicsResult {
   elaStats: ElaStats;
   preparedBase64: string;
   preparedMimeType: string;
+  detailCropBase64?: string;
+  detailCropRegion?: [number, number, number, number];
 }
 
 export async function runClientForensics(
@@ -146,23 +148,33 @@ export async function runClientForensics(
     elaStats: ela.stats,
     preparedBase64: prepared.base64,
     preparedMimeType: prepared.mimeType,
+    detailCropBase64: prepared.detailCropBase64,
+    detailCropRegion: prepared.detailCropRegion,
   };
+}
+
+export interface ExtraForensicSignals {
+  detailCropBase64?: string;
+  detailCropRegion?: [number, number, number, number];
 }
 
 export async function runServerAiAnalysis(
   preparedBase64: string,
   preparedMimeType: string,
   metadata: ImageMetadata,
-  elaStats?: ElaStats | null
+  elaStats?: ElaStats | null,
+  extra?: ExtraForensicSignals
 ): Promise<AiAnalysisResponse> {
   const baseContext = buildMetadataContextForAi(metadata);
   const elaSummary = elaStats
-    ? `\nError Level Analysis (ELA @ Q${elaStats.quality}, ${elaStats.scale}x): Mean Residual=${elaStats.meanError}, Max Delta=${elaStats.maxError}, High-Variance Pixels=${elaStats.highVarianceRatio}%, Profile="${elaStats.uniformityAssessment}"`
+    ? `\nError Level Analysis (ELA @ Q${elaStats.quality}, ${elaStats.scale}x): Mean Residual=${elaStats.meanError}, Max Delta=${elaStats.maxError}, High-Variance Pixels=${elaStats.highVarianceRatio}% (note: uniform low ELA is normal for single-saved camera JPEGs, PNGs, and social re-exports).`
     : '';
 
   const payload = JSON.stringify({
     imageBase64: preparedBase64,
     mimeType: preparedMimeType,
+    detailCropBase64: extra?.detailCropBase64,
+    detailCropRegion: extra?.detailCropRegion,
     metadataContext: `${baseContext}${elaSummary}`,
   });
 
