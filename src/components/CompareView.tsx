@@ -1,7 +1,8 @@
-import { useRef, useState, type FormEvent } from 'react';
+import { useRef, useState, type DragEvent, type FormEvent } from 'react';
 import {
   AlertTriangle,
   ArrowLeftRight,
+  GripVertical,
   Link2,
   Loader2,
   Scale,
@@ -19,17 +20,32 @@ import type {
 } from '../types/forensics';
 import { formatVerdictLabel } from '../utils/reportExport';
 
+const COMPARE_SLOT_MIME = 'application/x-veritas-compare-slot';
+
 interface CompareViewProps {
   slotA: CompareSlot;
   slotB: CompareSlot;
   history: HistoryRecord[];
   onLoadFile: (slot: 'A' | 'B', file: File) => void;
+  onLoadPairFiles: (fileA: File, fileB: File) => void;
   onLoadUrl: (slot: 'A' | 'B', url: string) => void;
   onLoadSample: (slot: 'A' | 'B', sample: SampleImage) => void;
   onLoadHistory: (slot: 'A' | 'B', record: HistoryRecord) => void;
   onClearSlot: (slot: 'A' | 'B') => void;
   onSwapSlots: () => void;
   onOpenInAnalyzer: (slot: 'A' | 'B') => void;
+}
+
+function extractDroppedUrl(dt: DataTransfer): string | null {
+  const uriList = dt.getData('text/uri-list') || dt.getData('text/plain') || '';
+  const firstLine = uriList
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => line && !line.startsWith('#'));
+  if (firstLine && /^https?:\/\//i.test(firstLine)) {
+    return firstLine;
+  }
+  return null;
 }
 
 function VerdictBadgeText({ verdict, probability }: { verdict: VerdictType; probability: number }) {
@@ -65,9 +81,11 @@ interface SlotCardProps {
   layer: 'original' | 'ela';
   history: HistoryRecord[];
   onLoadFile: (file: File) => void;
+  onLoadPairFiles: (fileA: File, fileB: File) => void;
   onLoadUrl: (url: string) => void;
   onLoadSample: (sample: SampleImage) => void;
   onLoadHistory: (record: HistoryRecord) => void;
+  onSwapSlots: () => void;
   onClear: () => void;
   onOpenInAnalyzer: () => void;
 }
@@ -78,14 +96,20 @@ function CompareSlotCard({
   layer,
   history,
   onLoadFile,
+  onLoadPairFiles,
   onLoadUrl,
   onLoadSample,
   onLoadHistory,
+  onSwapSlots,
   onClear,
   onOpenInAnalyzer,
 }: SlotCardProps) {
   const fileRef = useRef<HTMLInputElement | null>(null);
+  const dragDepthRef = useRef(0);
   const [urlVal, setUrlVal] = useState('');
+  const [dragMode, setDragMode] = useState<'none' | 'file' | 'pair' | 'swap'>('none');
+
+  const otherSlot: 'A' | 'B' = slotKey === 'A' ? 'B' : 'A';
 
   const handleSubmitUrl = (e: FormEvent) => {
     e.preventDefault();
@@ -95,24 +119,160 @@ function CompareSlotCard({
     setUrlVal('');
   };
 
+  const detectDragMode = (dt: DataTransfer): 'none' | 'file' | 'pair' | 'swap' => {
+    const types = Array.from(dt.types || []);
+    if (types.includes(COMPARE_SLOT_MIME)) {
+      return 'swap';
+    }
+    if (types.includes('Files')) {
+      const fileItems = Array.from(dt.items || []).filter((item) => item.kind === 'file');
+      return fileItems.length >= 2 ? 'pair' : 'file';
+    }
+    if (types.includes('text/uri-list')) {
+      return 'file';
+    }
+    return 'none';
+  };
+
+  const handleDragEnter = (e: DragEvent<HTMLDivElement>) => {
+    const mode = detectDragMode(e.dataTransfer);
+    if (mode === 'none') return;
+    e.preventDefault();
+    dragDepthRef.current += 1;
+    setDragMode(mode);
+  };
+
+  const handleDragOver = (e: DragEvent<HTMLDivElement>) => {
+    const mode = detectDragMode(e.dataTransfer);
+    if (mode === 'none') return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = mode === 'swap' ? 'move' : 'copy';
+    if (dragMode !== mode) {
+      setDragMode(mode);
+    }
+  };
+
+  const handleDragLeave = (e: DragEvent<HTMLDivElement>) => {
+    if (dragDepthRef.current <= 0) return;
+    e.preventDefault();
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) {
+      setDragMode('none');
+    }
+  };
+
+  const handleDrop = (e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragDepthRef.current = 0;
+    setDragMode('none');
+
+    if (slot.isLoading) return;
+
+    // 1. Check in-app slot-to-slot swap drag
+    const draggedFromSlot = e.dataTransfer.getData(COMPARE_SLOT_MIME);
+    if (draggedFromSlot === 'A' || draggedFromSlot === 'B') {
+      if (draggedFromSlot !== slotKey) {
+        onSwapSlots();
+      }
+      return;
+    }
+
+    // 2. Check dropped files
+    const files = Array.from(e.dataTransfer.files || []).filter(
+      (f) => !f.type || f.type.startsWith('image/')
+    );
+    if (files.length >= 2) {
+      if (slotKey === 'A') {
+        onLoadPairFiles(files[0], files[1]);
+      } else {
+        onLoadPairFiles(files[1], files[0]);
+      }
+      return;
+    }
+    if (files.length === 1) {
+      onLoadFile(files[0]);
+      return;
+    }
+
+    // 3. Check dropped remote image URL
+    const droppedUrl = extractDroppedUrl(e.dataTransfer);
+    if (droppedUrl) {
+      onLoadUrl(droppedUrl);
+    }
+  };
+
   const activeImg =
     layer === 'ela' && slot.elaDataUrl ? slot.elaDataUrl : slot.imageDataUrl;
 
+  const isDragActive = dragMode !== 'none';
+
   return (
-    <div className="flex flex-col rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-[#111827]">
+    <div
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+      className={`relative flex flex-col overflow-hidden rounded-xl border bg-white transition-colors dark:bg-[#111827] ${
+        isDragActive
+          ? 'border-blue-600 ring-2 ring-blue-600/20 dark:border-blue-500 dark:ring-blue-500/25'
+          : 'border-slate-200 dark:border-slate-800'
+      }`}
+    >
+      {/* Hidden input always mounted so both empty & occupied slots support quick file replacement */}
+      <input
+        ref={fileRef}
+        type="file"
+        multiple
+        accept="image/jpeg,image/png,image/webp,image/gif"
+        className="hidden"
+        onChange={(e) => {
+          const files = Array.from(e.target.files || []);
+          if (files.length >= 2) {
+            if (slotKey === 'A') onLoadPairFiles(files[0], files[1]);
+            else onLoadPairFiles(files[1], files[0]);
+          } else if (files.length === 1) {
+            onLoadFile(files[0]);
+          }
+          e.target.value = '';
+        }}
+      />
+
       {/* Slot Header */}
       <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-3 dark:border-slate-800">
-        <div className="min-w-0">
-          <span className="font-display text-sm font-semibold text-slate-900 dark:text-slate-100">
+        <div className="flex min-w-0 items-center gap-1.5">
+          {slot.imageDataUrl ? (
+            <span
+              draggable
+              onDragStart={(e) => {
+                e.dataTransfer.setData(COMPARE_SLOT_MIME, slotKey);
+                e.dataTransfer.effectAllowed = 'move';
+              }}
+              title={`Drag onto Image ${otherSlot} to swap`}
+              className="inline-flex cursor-grab items-center text-slate-400 hover:text-slate-600 active:cursor-grabbing dark:text-slate-500 dark:hover:text-slate-300"
+            >
+              <GripVertical className="h-3.5 w-3.5" aria-hidden="true" />
+            </span>
+          ) : null}
+          <span className="font-display text-sm font-semibold text-slate-900 whitespace-nowrap dark:text-slate-100">
             Image {slotKey}
           </span>
           {slot.metadata ? (
-            <span className="ml-2 text-xs text-slate-500 dark:text-slate-400">
+            <span className="truncate text-xs text-slate-500 dark:text-slate-400">
               · {slot.metadata.fileName}
             </span>
           ) : null}
         </div>
         <div className="flex items-center gap-2 shrink-0">
+          {slot.imageDataUrl && !slot.isLoading ? (
+            <button
+              type="button"
+              onClick={() => fileRef.current?.click()}
+              className="text-xs font-medium text-slate-500 hover:text-slate-900 whitespace-nowrap dark:text-slate-400 dark:hover:text-slate-100"
+            >
+              Replace
+            </button>
+          ) : null}
           {slot.report ? (
             <button
               type="button"
@@ -138,12 +298,21 @@ function CompareSlotCard({
       {/* Image Viewport or Picker */}
       {slot.imageDataUrl ? (
         <div className="flex flex-col">
-          <div className="relative flex aspect-[4/3] w-full items-center justify-center overflow-hidden bg-slate-100 p-3 dark:bg-[#0D1320]">
+          <div
+            draggable
+            onDragStart={(e) => {
+              e.dataTransfer.setData(COMPARE_SLOT_MIME, slotKey);
+              e.dataTransfer.effectAllowed = 'move';
+            }}
+            title={`Drag onto Image ${otherSlot} to swap, or drop a new file here to replace`}
+            className="relative flex aspect-[4/3] w-full cursor-grab items-center justify-center overflow-hidden bg-slate-100 p-3 active:cursor-grabbing dark:bg-[#0D1320]"
+          >
             <img
               src={activeImg || slot.imageDataUrl}
               alt={`Comparison slot ${slotKey}`}
               referrerPolicy="no-referrer"
-              className="max-h-full max-w-full rounded object-contain"
+              draggable={false}
+              className="max-h-full max-w-full rounded object-contain select-none"
             />
             {slot.isLoading ? (
               <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-slate-950/55 text-white backdrop-blur-[1px]">
@@ -203,29 +372,22 @@ function CompareSlotCard({
                 fileRef.current?.click();
               }
             }}
-            className="flex aspect-[16/10] flex-col items-center justify-center rounded-lg border border-dashed border-slate-300 bg-slate-50/70 p-4 text-center transition-colors hover:border-slate-400 cursor-pointer dark:border-slate-700 dark:bg-slate-900/50 dark:hover:border-slate-600"
+            className={`flex aspect-[16/10] flex-col items-center justify-center rounded-lg border border-dashed p-4 text-center transition-colors cursor-pointer ${
+              isDragActive
+                ? 'border-blue-600 bg-blue-50/70 dark:border-blue-500 dark:bg-blue-950/30'
+                : 'border-slate-300 bg-slate-50/70 hover:border-slate-400 dark:border-slate-700 dark:bg-slate-900/50 dark:hover:border-slate-600'
+            }`}
           >
-            <input
-              ref={fileRef}
-              type="file"
-              accept="image/jpeg,image/png,image/webp,image/gif"
-              className="hidden"
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) onLoadFile(f);
-                e.target.value = '';
-              }}
-            />
             {slot.isLoading ? (
               <Loader2 className="h-5 w-5 animate-spin text-blue-600 dark:text-blue-400" />
             ) : (
               <Upload className="h-5 w-5 text-slate-500 dark:text-slate-400" />
             )}
             <p className="mt-2.5 text-sm font-medium text-slate-800 dark:text-slate-200">
-              {slot.isLoading ? 'Loading image…' : `Upload Image ${slotKey}`}
+              {slot.isLoading ? 'Loading image…' : `Drop or upload Image ${slotKey}`}
             </p>
             <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-              JPEG, PNG, WebP, or GIF up to 10 MB
+              Drop 1 image here, or 2 images to fill both A & B
             </p>
           </div>
 
@@ -302,6 +464,36 @@ function CompareSlotCard({
           </div>
         </div>
       )}
+
+      {/* Active Drag-Over Overlay (non-interactive so drop lands cleanly on card) */}
+      {isDragActive ? (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 z-20 flex flex-col items-center justify-center bg-blue-600/12 p-6 text-center backdrop-blur-[2px] dark:bg-blue-500/18"
+        >
+          <div className="flex flex-col items-center rounded-xl border border-blue-500/70 bg-white/95 px-5 py-4 shadow-sm dark:border-blue-400/70 dark:bg-[#0F1522]/95">
+            {dragMode === 'swap' ? (
+              <ArrowLeftRight className="h-5 w-5 text-blue-600 dark:text-blue-400" />
+            ) : (
+              <Upload className="h-5 w-5 text-blue-600 dark:text-blue-400" />
+            )}
+            <p className="mt-2 font-display text-sm font-semibold text-slate-900 dark:text-slate-100">
+              {dragMode === 'swap'
+                ? `Drop to swap Image A ↔ B`
+                : dragMode === 'pair'
+                  ? 'Drop 2 images to compare A & B'
+                  : slot.imageDataUrl
+                    ? `Drop to replace Image ${slotKey}`
+                    : `Drop to load Image ${slotKey}`}
+            </p>
+            <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+              {dragMode === 'swap'
+                ? 'Instantly exchanges both comparison slots'
+                : 'Runs live vision, EXIF, and ELA comparison'}
+            </p>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -311,6 +503,7 @@ export function CompareView({
   slotB,
   history,
   onLoadFile,
+  onLoadPairFiles,
   onLoadUrl,
   onLoadSample,
   onLoadHistory,
@@ -335,7 +528,7 @@ export function CompareView({
             Side-by-Side Comparison
           </h1>
           <p className="mt-1 text-xs text-slate-500 sm:text-sm dark:text-slate-400">
-            Load two images to compare authenticity scores, visual artifact signals, EXIF provenance, and ELA residuals.
+            Drag and drop images onto either slot (or drop 2 at once) to compare authenticity scores, EXIF provenance, and ELA residuals.
           </p>
         </div>
 
@@ -381,9 +574,11 @@ export function CompareView({
           layer={layer}
           history={history}
           onLoadFile={(f) => onLoadFile('A', f)}
+          onLoadPairFiles={onLoadPairFiles}
           onLoadUrl={(u) => onLoadUrl('A', u)}
           onLoadSample={(s) => onLoadSample('A', s)}
           onLoadHistory={(h) => onLoadHistory('A', h)}
+          onSwapSlots={onSwapSlots}
           onClear={() => onClearSlot('A')}
           onOpenInAnalyzer={() => onOpenInAnalyzer('A')}
         />
@@ -393,9 +588,11 @@ export function CompareView({
           layer={layer}
           history={history}
           onLoadFile={(f) => onLoadFile('B', f)}
+          onLoadPairFiles={onLoadPairFiles}
           onLoadUrl={(u) => onLoadUrl('B', u)}
           onLoadSample={(s) => onLoadSample('B', s)}
           onLoadHistory={(h) => onLoadHistory('B', h)}
+          onSwapSlots={onSwapSlots}
           onClear={() => onClearSlot('B')}
           onOpenInAnalyzer={() => onOpenInAnalyzer('B')}
         />
@@ -477,7 +674,7 @@ export function CompareView({
                       {slotB.elaStats.meanError}
                     </td>
                     <td className="px-5 py-3 text-right font-mono text-xs tabular-nums text-slate-500 dark:text-slate-400">
-                      {(slotB.elaStats.meanError - slotA.elaStats.meanError) >= 0 ? '+' : ''}
+                      {slotB.elaStats.meanError - slotA.elaStats.meanError >= 0 ? '+' : ''}
                       {(slotB.elaStats.meanError - slotA.elaStats.meanError).toFixed(2)}
                     </td>
                   </tr>

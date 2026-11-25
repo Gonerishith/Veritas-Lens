@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type DragEvent } from 'react';
 import { BatchView } from './components/BatchView';
 import { CameraCaptureModal } from './components/CameraCaptureModal';
 import { CompareView } from './components/CompareView';
@@ -38,7 +38,7 @@ import {
   listHistoryRecords,
   saveHistoryRecord,
 } from './utils/historyDb';
-import { Link2, Loader2 } from 'lucide-react';
+import { ArrowLeftRight, Layers, Link2, Loader2, Upload } from 'lucide-react';
 import { buildMarkdownReport, downloadTextFile } from './utils/reportExport';
 import {
   clearShareUrlFromAddressBar,
@@ -112,12 +112,48 @@ export default function App() {
   } | null>(null);
   const [isLoadingShared, setIsLoadingShared] = useState(false);
   const [shareLoadError, setShareLoadError] = useState<string | null>(null);
+  const [globalDragActive, setGlobalDragActive] = useState(false);
+  const [globalDragCount, setGlobalDragCount] = useState(0);
 
   const scanSequenceRef = useRef(0);
+  const globalDragDepthRef = useRef(0);
   const batchAssetsRef = useRef<Map<string, LoadedImageAsset>>(new Map());
   const batchRunIdRef = useRef(0);
   const batchItemsRef = useRef<BatchItem[]>([]);
   batchItemsRef.current = batchItems;
+
+  // Prevent browser file navigation on stray window drops & clear overlay on window blur/dragend
+  useEffect(() => {
+    const handleWindowDragOver = (e: globalThis.DragEvent) => {
+      if (e.dataTransfer?.types && Array.from(e.dataTransfer.types).includes('Files')) {
+        e.preventDefault();
+      }
+    };
+    const handleWindowDrop = (e: globalThis.DragEvent) => {
+      if (e.dataTransfer?.types && Array.from(e.dataTransfer.types).includes('Files')) {
+        e.preventDefault();
+      }
+      globalDragDepthRef.current = 0;
+      setGlobalDragActive(false);
+      setGlobalDragCount(0);
+    };
+    const resetGlobalDrag = () => {
+      globalDragDepthRef.current = 0;
+      setGlobalDragActive(false);
+      setGlobalDragCount(0);
+    };
+
+    window.addEventListener('dragover', handleWindowDragOver);
+    window.addEventListener('drop', handleWindowDrop);
+    window.addEventListener('dragend', resetGlobalDrag);
+    window.addEventListener('blur', resetGlobalDrag);
+    return () => {
+      window.removeEventListener('dragover', handleWindowDragOver);
+      window.removeEventListener('drop', handleWindowDrop);
+      window.removeEventListener('dragend', resetGlobalDrag);
+      window.removeEventListener('blur', resetGlobalDrag);
+    };
+  }, []);
 
   // Sync Tailwind v4 .dark class on <html>
   useEffect(() => {
@@ -253,7 +289,8 @@ export default function App() {
       const aiRes = await runServerAiAnalysis(
         clientRes.preparedBase64,
         clientRes.preparedMimeType,
-        clientRes.metadata
+        clientRes.metadata,
+        clientRes.elaStats
       );
       if (seq !== scanSequenceRef.current) return;
 
@@ -422,7 +459,8 @@ export default function App() {
       const aiRes = await runServerAiAnalysis(
         clientRes.preparedBase64,
         clientRes.preparedMimeType,
-        clientRes.metadata
+        clientRes.metadata,
+        clientRes.elaStats
       );
       const report = assembleForensicReport(asset, clientRes, aiRes);
 
@@ -461,6 +499,11 @@ export default function App() {
         error: err instanceof Error ? err.message : 'Unable to load file.',
       }));
     }
+  };
+
+  const handleComparePairFiles = (fileA: File, fileB: File) => {
+    void handleCompareFile('A', fileA);
+    void handleCompareFile('B', fileB);
   };
 
   const handleCompareUrl = async (slotKey: 'A' | 'B', url: string) => {
@@ -614,7 +657,8 @@ export default function App() {
           const aiRes = await runServerAiAnalysis(
             clientRes.preparedBase64,
             clientRes.preparedMimeType,
-            clientRes.metadata
+            clientRes.metadata,
+            clientRes.elaStats
           );
           if (batchRunIdRef.current !== runId) return;
 
@@ -853,8 +897,90 @@ export default function App() {
     setActiveTab('compare');
   };
 
+  const hasExternalFiles = (dt: DataTransfer | null): boolean =>
+    Boolean(dt?.types && Array.from(dt.types).includes('Files'));
+
+  const handleRootDragEnter = (e: DragEvent<HTMLDivElement>) => {
+    if (!hasExternalFiles(e.dataTransfer)) return;
+    e.preventDefault();
+    globalDragDepthRef.current += 1;
+    const itemCount = Array.from(e.dataTransfer.items || []).filter(
+      (item) => item.kind === 'file'
+    ).length;
+    if (itemCount > 0) setGlobalDragCount(itemCount);
+    setGlobalDragActive(true);
+  };
+
+  const handleRootDragOver = (e: DragEvent<HTMLDivElement>) => {
+    if (!hasExternalFiles(e.dataTransfer)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    if (!globalDragActive) setGlobalDragActive(true);
+  };
+
+  const handleRootDragLeave = (e: DragEvent<HTMLDivElement>) => {
+    if (globalDragDepthRef.current <= 0) return;
+    e.preventDefault();
+    globalDragDepthRef.current = Math.max(0, globalDragDepthRef.current - 1);
+    if (globalDragDepthRef.current === 0) {
+      setGlobalDragActive(false);
+      setGlobalDragCount(0);
+    }
+  };
+
+  const handleRootDropCapture = () => {
+    globalDragDepthRef.current = 0;
+    setGlobalDragActive(false);
+    setGlobalDragCount(0);
+  };
+
+  const handleRootDrop = (e: DragEvent<HTMLDivElement>) => {
+    if (!hasExternalFiles(e.dataTransfer)) return;
+    e.preventDefault();
+    globalDragDepthRef.current = 0;
+    setGlobalDragActive(false);
+    setGlobalDragCount(0);
+
+    if (isCameraOpen) return;
+
+    const files = Array.from(e.dataTransfer.files || []);
+    if (files.length === 0) return;
+
+    if (activeTab === 'compare') {
+      if (files.length >= 2) {
+        handleComparePairFiles(files[0], files[1]);
+      } else {
+        const targetSlot: 'A' | 'B' = !slotA.imageDataUrl
+          ? 'A'
+          : !slotB.imageDataUrl
+            ? 'B'
+            : 'A';
+        void handleCompareFile(targetSlot, files[0]);
+      }
+      return;
+    }
+
+    if (activeTab === 'batch') {
+      void handleAddBatchFiles(files);
+      return;
+    }
+
+    if (files.length > 1) {
+      void handleAddBatchFiles(files);
+    } else {
+      void handleSelectFile(files[0], 'upload');
+    }
+  };
+
   return (
-    <div className="flex min-h-screen flex-col bg-white text-slate-900 transition-colors dark:bg-[#0B0F17] dark:text-slate-100">
+    <div
+      onDragEnter={handleRootDragEnter}
+      onDragOver={handleRootDragOver}
+      onDragLeave={handleRootDragLeave}
+      onDropCapture={handleRootDropCapture}
+      onDrop={handleRootDrop}
+      className="relative flex min-h-screen flex-col bg-white text-slate-900 transition-colors dark:bg-[#0B0F17] dark:text-slate-100"
+    >
       <TopNav
         activeTab={activeTab}
         onSelectTab={setActiveTab}
@@ -1005,6 +1131,7 @@ export default function App() {
             slotB={slotB}
             history={history}
             onLoadFile={handleCompareFile}
+            onLoadPairFiles={handleComparePairFiles}
             onLoadUrl={handleCompareUrl}
             onLoadSample={handleCompareSample}
             onLoadHistory={handleLoadHistoryIntoCompare}
@@ -1063,6 +1190,52 @@ export default function App() {
         }}
         onOpenBatchTab={() => setActiveTab('batch')}
       />
+
+      {/* Global Context-Aware Drag & Drop Indicator */}
+      {globalDragActive && !isCameraOpen ? (
+        activeTab === 'compare' ? (
+          <div
+            aria-hidden="true"
+            className="pointer-events-none fixed inset-x-4 bottom-20 z-40 flex justify-center md:bottom-6"
+          >
+            <div className="inline-flex items-center gap-2.5 rounded-xl border border-blue-500/80 bg-white/95 px-4 py-2.5 text-xs font-medium text-slate-900 shadow-lg backdrop-blur-sm dark:border-blue-400/70 dark:bg-[#0F1522]/95 dark:text-slate-100">
+              <ArrowLeftRight className="h-4 w-4 shrink-0 text-blue-600 dark:text-blue-400" />
+              <span>
+                {globalDragCount >= 2
+                  ? 'Drop anywhere to compare both images side-by-side in A & B'
+                  : 'Drop directly onto Image A or Image B to load'}
+              </span>
+            </div>
+          </div>
+        ) : activeTab !== 'analyze' || Boolean(activeImageUrl || activeReport) ? (
+          <div
+            aria-hidden="true"
+            className="pointer-events-none fixed inset-0 z-40 flex items-center justify-center bg-slate-950/25 p-6 backdrop-blur-[2px] dark:bg-slate-950/55"
+          >
+            <div className="flex max-w-md flex-col items-center rounded-2xl border-2 border-dashed border-blue-600 bg-white/95 px-8 py-7 text-center shadow-xl dark:border-blue-400 dark:bg-[#0F1522]/95">
+              <div className="flex h-12 w-12 items-center justify-center rounded-xl border border-blue-200 bg-blue-50 text-blue-600 dark:border-blue-800 dark:bg-blue-950/60 dark:text-blue-400">
+                {activeTab === 'batch' || globalDragCount > 1 ? (
+                  <Layers className="h-5 w-5" />
+                ) : (
+                  <Upload className="h-5 w-5" />
+                )}
+              </div>
+              <p className="mt-3.5 font-display text-base font-semibold text-slate-900 dark:text-slate-100">
+                {activeTab === 'batch'
+                  ? 'Drop images to add to Batch Queue'
+                  : globalDragCount > 1
+                    ? `Drop ${globalDragCount} images to start Batch Analysis`
+                    : 'Drop image anywhere to analyze'}
+              </p>
+              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                {activeTab === 'batch'
+                  ? 'Appends up to 20 images and runs vision, EXIF, and ELA automatically'
+                  : 'Drop 1 image to inspect immediately, or multiple images for Batch mode'}
+              </p>
+            </div>
+          </div>
+        ) : null
+      ) : null}
     </div>
   );
 }

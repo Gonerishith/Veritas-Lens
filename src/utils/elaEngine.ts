@@ -163,12 +163,15 @@ export async function prepareAnalysisPayload(
   const width = img.naturalWidth;
   const height = img.naturalHeight;
 
-  // If image is huge (> 1800px) or large base64, downscale cleanly for rapid, reliable Gemini inspection
-  const maxDim = 1800;
-  const needsResize = Math.max(width, height) > maxDim || imageDataUrl.length > 5_000_000;
+  // Preserve fine forensic details (emblems, lug nuts, license plates, micro-grain) up to 2048px
+  // while keeping the JSON body safely under Vercel's 4.5 MB serverless payload limit.
+  const maxDim = 2048;
+  const maxSafeBase64Chars = 3_300_000;
+  const commaIdx = imageDataUrl.indexOf(',');
+  const rawBase64 = commaIdx >= 0 ? imageDataUrl.slice(commaIdx + 1) : imageDataUrl;
+
+  const needsResize = Math.max(width, height) > maxDim || rawBase64.length > maxSafeBase64Chars;
   if (!needsResize) {
-    const commaIdx = imageDataUrl.indexOf(',');
-    const rawBase64 = commaIdx >= 0 ? imageDataUrl.slice(commaIdx + 1) : imageDataUrl;
     const normalizedMime = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(mimeType)
       ? mimeType
       : 'image/jpeg';
@@ -183,16 +186,24 @@ export async function prepareAnalysisPayload(
   canvas.height = targetH;
   const ctx = canvas.getContext('2d');
   if (!ctx) {
-    const commaIdx = imageDataUrl.indexOf(',');
     return {
-      base64: commaIdx >= 0 ? imageDataUrl.slice(commaIdx + 1) : imageDataUrl,
+      base64: rawBase64,
       mimeType: 'image/jpeg',
       width,
       height,
     };
   }
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(img, 0, 0, targetW, targetH);
-  const compressed = canvas.toDataURL('image/jpeg', 0.9);
-  const base64 = compressed.slice(compressed.indexOf(',') + 1);
+
+  let base64 = '';
+  for (const quality of [0.92, 0.86, 0.8]) {
+    const compressed = canvas.toDataURL('image/jpeg', quality);
+    base64 = compressed.slice(compressed.indexOf(',') + 1);
+    if (base64.length <= maxSafeBase64Chars) {
+      break;
+    }
+  }
   return { base64, mimeType: 'image/jpeg', width, height };
 }

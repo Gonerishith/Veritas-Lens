@@ -70,6 +70,7 @@ export function BatchView({
   onSendToCompare,
 }: BatchViewProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const dragDepthRef = useRef(0);
   const [isDragging, setIsDragging] = useState(false);
   const [filter, setFilter] = useState<BatchFilter>('all');
   const [query, setQuery] = useState('');
@@ -176,18 +177,33 @@ export function BatchView({
     );
   };
 
-  const handleDragOver = (e: DragEvent<HTMLDivElement>) => {
+  const handleDragEnter = (e: DragEvent<HTMLDivElement>) => {
+    if (!Array.from(e.dataTransfer.types || []).includes('Files')) return;
     e.preventDefault();
+    dragDepthRef.current += 1;
+    setIsDragging(true);
+  };
+
+  const handleDragOver = (e: DragEvent<HTMLDivElement>) => {
+    if (!Array.from(e.dataTransfer.types || []).includes('Files')) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
     if (!isDragging) setIsDragging(true);
   };
 
   const handleDragLeave = (e: DragEvent<HTMLDivElement>) => {
+    if (dragDepthRef.current <= 0) return;
     e.preventDefault();
-    setIsDragging(false);
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) {
+      setIsDragging(false);
+    }
   };
 
   const handleDrop = (e: DragEvent<HTMLDivElement>) => {
     e.preventDefault();
+    e.stopPropagation();
+    dragDepthRef.current = 0;
     setIsDragging(false);
     const files = Array.from(e.dataTransfer.files || []);
     if (files.length > 0) {
@@ -218,7 +234,13 @@ export function BatchView({
       : 0;
 
   return (
-    <div className="mx-auto max-w-[1440px] px-4 py-5 sm:px-6 sm:py-8 lg:px-8">
+    <div
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+      className="mx-auto max-w-[1440px] px-4 py-5 sm:px-6 sm:py-8 lg:px-8"
+    >
       {/* Header & Top Actions */}
       <div className="flex flex-col justify-between gap-3 sm:flex-row sm:flex-wrap sm:items-end sm:gap-4">
         <div>
@@ -321,9 +343,6 @@ export function BatchView({
 
       {/* Multi-Image Dropzone */}
       <div
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDrop}
         className={`mt-6 flex flex-col items-center justify-between gap-4 rounded-xl border border-dashed px-6 transition-colors sm:flex-row ${
           items.length === 0 ? 'py-12' : 'py-5'
         } ${

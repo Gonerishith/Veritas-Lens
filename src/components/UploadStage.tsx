@@ -23,29 +23,52 @@ export function UploadStage({
   errorMessage,
 }: UploadStageProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const dragDepthRef = useRef(0);
   const [isDragging, setIsDragging] = useState(false);
   const [urlInput, setUrlInput] = useState('');
   const [failedSamples, setFailedSamples] = useState<Record<string, boolean>>({});
 
+  const handleDragEnter = (e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    dragDepthRef.current += 1;
+    setIsDragging(true);
+  };
+
   const handleDragOver = (e: DragEvent<HTMLDivElement>) => {
     e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
     if (!isDragging) setIsDragging(true);
   };
 
   const handleDragLeave = (e: DragEvent<HTMLDivElement>) => {
     e.preventDefault();
-    setIsDragging(false);
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) {
+      setIsDragging(false);
+    }
   };
 
   const handleDrop = (e: DragEvent<HTMLDivElement>) => {
     e.preventDefault();
+    e.stopPropagation();
+    dragDepthRef.current = 0;
     setIsDragging(false);
     if (isBusy) return;
     const files = Array.from(e.dataTransfer.files || []);
     if (files.length > 1) {
       onSelectMultipleFiles(files);
-    } else if (files.length === 1) {
+      return;
+    }
+    if (files.length === 1) {
       onSelectFile(files[0]);
+      return;
+    }
+    const uri = (e.dataTransfer.getData('text/uri-list') || e.dataTransfer.getData('text/plain') || '')
+      .split(/\r?\n/)
+      .map((s) => s.trim())
+      .find((s) => /^https?:\/\//i.test(s));
+    if (uri) {
+      onImportUrl(uri);
     }
   };
 
@@ -71,6 +94,7 @@ export function UploadStage({
       {/* Primary Upload + URL Console */}
       <div className="mx-auto mt-6 max-w-3xl sm:mt-9">
         <div
+          onDragEnter={handleDragEnter}
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}

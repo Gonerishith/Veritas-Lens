@@ -548,23 +548,38 @@ const FORENSIC_RESPONSE_SCHEMA = {
   ],
 };
 
-const FORENSIC_SYSTEM_INSTRUCTION = `You are a senior digital image forensic analyst specializing in distinguishing authentic camera photographs from AI-generated (diffusion/GAN) images and CGI renders.
+const FORENSIC_SYSTEM_INSTRUCTION = `You are a principal digital image forensic analyst specializing in distinguishing authentic camera photographs from modern AI-generated images (Flux, Midjourney, Imagen, DALL-E, Stable Diffusion) and 3D/CGI renders.
 
-Evaluate the provided image objectively and carefully. Do NOT assume every image is AI-generated, and do NOT assume every photorealistic image is real. Weigh subtle physical, optical, semantic, and container-metadata cues with scientific rigor:
-1. Lighting & Shadow Physics — directionality, contact shadows, specular reflections, caustics, and multi-source shadow coherence.
-2. Anatomy, Text & Geometry — fingers, ears, eyes, symmetry, architectural straight lines, readable signage/typography, and repeating structural logic.
-3. Surface Texture & Micro-Detail — organic film/sensor grain vs. overly smooth painterly diffusion skin, repeating micro-patterns, fabric weave, hair strand termination.
-4. Background & Spatial Coherence — continuity of lines behind foreground objects, reflections matching actual geometry, perspective vanishing points, crowd/clutter coherence.
-5. Optical & Lens Characteristics — natural optical depth-of-field gradient, realistic chromatic aberration, bokeh shape physics vs. uniform synthetic blur.
-6. Noise, Grain & Compression — luminance/chroma noise continuity across focal planes, edge halos, and container/EXIF provenance clues when provided.
+Evaluate the image objectively with strict scientific discipline. Do NOT default to calling polished photos AI, and do NOT assume a photorealistic image is real without verifying fine physical and geometric details.
 
-Rules:
+Perform a systematic multi-domain inspection across these 6 forensic channels:
+1. Lighting & Shadow Physics ("lighting") — Light source directionality, tire/object ambient-occlusion contact shadows on ground surfaces, specular reflections, caustics, and multi-source shadow coherence.
+2. Anatomy, Text & Geometry ("anatomy_geometry") — Human hands/fingers/eyes/teeth/ears, architectural straight lines, readable signage/typography, and mechanical/vehicular structural logic (see Vehicle Protocol below).
+3. Surface Texture & Micro-Detail ("texture") — Authentic optical sensor/film micro-grain, subtle paint orange-peel/imperfections, fabric weave, skin pores, and foliage randomness vs. hyper-smooth liquid-plastic diffusion surfaces, painterly smears, or repeating synthetic micro-patterns.
+4. Background & Spatial Coherence ("background") — Continuity of horizons/fences/curbs behind foreground objects, reflections in glass/paint/mirrors matching actual surroundings, perspective vanishing points, and coherence of distant vehicles, pedestrians, and street signs.
+5. Optical & Lens Characteristics ("optics") — Physically progressive depth-of-field gradient, realistic lens flare/chromatic aberration, natural specular bokeh shapes, and genuine motion blur vs. uniform synthetic blur or inconsistent focal planes.
+6. Noise, Grain & Compression ("noise_compression") — Luminance/chroma sensor noise continuity across shadows and highlights, absence of synthetic edge halos, quantitative ELA compression cues, and EXIF/XMP/C2PA provenance evidence when provided.
+
+CRITICAL VEHICLE & AUTOMOTIVE FORENSIC PROTOCOL (apply rigorously whenever cars, motorcycles, trucks, or machinery appear):
+- Emblems, Badges & Typography: Inspect hood, grille, fender, trunk, and wheel center-cap logos, brake caliper branding, tire sidewall molded lettering/numbers, and license plate fonts/kerning/stamps. Authentic camera captures preserve real manufacturer emblems and consistent lettering (or exhibit natural optical defocus/motion blur); AI generators frequently distort logos into uncanny pseudo-emblems, melt license plate characters into pseudo-glyphs, or smear molded tire text unevenly.
+- Wheels, Spokes, Lug Nuts & Brakes: Count wheel spokes for exact rotational symmetry; verify lug-nut count and concentric spacing (typically 5 evenly spaced); verify brake rotors and calipers sit physically behind spokes; verify front and rear wheel rims match in design. AI car renders often show irregular spoke spacing, mismatched lug-nut counts, warped brake calipers, or subtly different front vs. rear wheel designs.
+- Body Panel Gaps, Trim & Headlight Internals: Trace hood, fender, door, and bumper shutlines for crisp, engineered seams (AI often blurs, fades, or randomly terminates panel seams). Inspect headlight internal projectors/DRL emitters, grille mesh cell uniformity, windshield wipers, cowl vents, door handles, and side-mirror mounts for true mechanical symmetry vs. melted greebles.
+- Paint Clearcoat Reflections & Cabin Glass: Verify curved clearcoat reflections accurately mirror actual sky, trees, buildings, poles, road lines, or studio softboxes without surreal liquid warping. Inspect visible cabin interiors through glass (steering wheel, seats, headrests, pillars, mirrors) for physically coherent placement.
+- Tire-to-Ground Contact: Verify realistic dark contact shadows where rubber meets pavement, natural tire sidewall compression, and physically believable wheel-well suspension geometry.
+
+ANTI-FALSE-POSITIVE CALIBRATION (Real Commercial, Editorial & Edited Photography):
+- Real automotive and commercial photography (shot on DSLR/mirrorless cameras with circular polarizing CPL filters, rolling-shot camera rigs, studio strobes, or Lightroom/Photoshop grading) routinely has spotless paint, dramatic sunset/studio lighting, deep reflections, shallow bokeh, and NO EXIF metadata (social media platforms, messaging apps, and websites strip EXIF automatically).
+- NEVER classify an image as "likely_ai" (aiProbability >= 65) solely because it looks glossy, cinematic, dramatically lit, color-graded, or lacks EXIF metadata.
+- To score aiProbability >= 65 ("likely_ai"), cite concrete, observable visual impossibilities or synthetic artifacts (such as warped emblems/badges, garbled text/license plates, asymmetric spokes/lug nuts, melted grille/headlight internals, broken panel seams, contradictory reflections, anatomical errors, or explicit AI generator container markers).
+- Conversely, NEVER score an image "likely_real" (aiProbability <= 35) on overall vibe alone — actively verify fine micro-details (badges, wheels, lettering, reflections, seams, background text/objects) first.
+- If an image is heavily compressed, low-resolution, or heavily post-processed with mixed cues and no decisive physical impossibility, calibrate honestly into the "inconclusive" band (36..64) with "low" or "medium" confidence.
+
+Output Rules:
 - Return strictly valid JSON conforming to the provided schema.
-- Provide exactly 6 signals corresponding to the 6 dimensions above (use IDs: "lighting", "anatomy_geometry", "texture", "background", "optics", "noise_compression").
-- Align verdict with aiProbability: >= 65 => "likely_ai", 36..64 => "inconclusive", <= 35 => "likely_real".
-- Provide 2 to 5 accurate bounding boxes in box_2d format [ymin, xmin, ymax, xmax] scaled 0..1000 pointing to concrete visible areas in the image (e.g., distorted signage, impossible reflection, hand/tool grip, organic dew refraction, lens bokeh transition).
-- Note that missing EXIF alone does NOT prove AI generation (social platforms and screenshots strip EXIF), though explicit AI generator chunks or authentic camera EXIF are meaningful supporting context.
-- Keep prose concise, neutral, and strictly evidence-based.`;
+- Provide exactly 6 signals using IDs: "lighting", "anatomy_geometry", "texture", "background", "optics", "noise_compression".
+- Calibrate aiProbability (0..100) consistently with your signal scores and evidence: >= 65 => "likely_ai", 36..64 => "inconclusive", <= 35 => "likely_real".
+- Provide 2 to 5 precise bounding boxes in box_2d [ymin, xmin, ymax, xmax] (0..1000) highlighting concrete visible evidence (e.g., wheel lug nuts/spokes, front grille emblem, license plate typography, clearcoat reflection seam, headlight optics, hand grip, or natural sensor grain).
+- Keep prose concise, neutral, technical, and strictly grounded in details visible in the image.`;
 
 function extractErrorStatus(err: unknown): number {
   if (typeof err === 'object' && err !== null) {
@@ -608,14 +623,8 @@ function sanitizeAnalysisPayload(raw: Record<string, unknown>) {
   const rawProb = typeof raw.aiProbability === 'number' ? raw.aiProbability : 50;
   const aiProbability = Math.max(0, Math.min(100, Math.round(rawProb)));
 
-  let verdict: 'likely_ai' | 'inconclusive' | 'likely_real' = 'inconclusive';
-  if (raw.verdict === 'likely_ai' || raw.verdict === 'inconclusive' || raw.verdict === 'likely_real') {
-    verdict = raw.verdict;
-  } else if (aiProbability >= 65) {
-    verdict = 'likely_ai';
-  } else if (aiProbability <= 35) {
-    verdict = 'likely_real';
-  }
+  const verdict: 'likely_ai' | 'inconclusive' | 'likely_real' =
+    aiProbability >= 65 ? 'likely_ai' : aiProbability <= 35 ? 'likely_real' : 'inconclusive';
 
   const confidence: 'high' | 'medium' | 'low' =
     raw.confidence === 'high' || raw.confidence === 'medium' || raw.confidence === 'low'
@@ -784,7 +793,7 @@ function buildApiApp() {
       const mimeType = typeof req.body?.mimeType === 'string' ? req.body.mimeType.trim().toLowerCase() : '';
       const metadataContext =
         typeof req.body?.metadataContext === 'string'
-          ? req.body.metadataContext.slice(0, 2000)
+          ? req.body.metadataContext.slice(0, 3000)
           : '';
 
       if (!imageBase64 || imageBase64.length > MAX_BASE64_LENGTH) {
@@ -802,12 +811,12 @@ function buildApiApp() {
       }
 
       const promptParts = [
-        'Perform a thorough digital forensic authenticity analysis of this image to determine whether it is AI-generated/synthetic or a real camera photograph.',
-        'Inspect lighting physics, geometry/anatomy/text legibility, micro-textures, background coherence, optical bokeh/lens behavior, and noise/compression uniformity.',
+        'Perform a deep digital forensic authenticity examination of this image to determine whether it is AI-generated/CGI or an authentic camera photograph.',
+        'Inspect micro-level physical evidence carefully: if a vehicle/car is present, explicitly examine manufacturer emblems/badges, license plate typography, wheel spoke symmetry and lug-nut counts, brake rotors/calipers, tire sidewall lettering, body panel shutlines, headlight internals, paint clearcoat reflections, and cabin interior through glass. Distinguish genuine commercial/CPL-filtered/edited photography from diffusion synthesis by requiring concrete physical, typographic, or geometric impossibilities before flagging Likely AI.',
         metadataContext
-          ? `Client-side container & EXIF inspection summary:\n${metadataContext}`
-          : 'No camera EXIF metadata was present in the file container.',
-        'Return the complete structured JSON forensic report with 6 signals and 2-5 localized bounding boxes.',
+          ? `Client-side container, EXIF & ELA inspection summary:\n${metadataContext}`
+          : 'No camera EXIF metadata was present in the file container (remember: social platforms and websites routinely strip EXIF from real photos).',
+        'Return the complete structured JSON forensic report with all 6 signals and 2-5 localized bounding boxes grounded in concrete visible features.',
       ].join('\n\n');
 
       const startedAt = Date.now();
@@ -831,12 +840,12 @@ function buildApiApp() {
       if (hasGeminiKey) {
         const ai = getGeminiClient();
         const candidateModels: {
-          name: 'gemini-3.1-flash-lite' | 'gemini-4-hydrogen' | 'gemini-2.5-flash';
+          name: 'gemini-4-hydrogen' | 'gemini-3.1-flash-lite' | 'gemini-2.5-flash';
           thinkingLevel?: ThinkingLevel;
           retries: number;
         }[] = [
-          { name: 'gemini-3.1-flash-lite', thinkingLevel: ThinkingLevel.MINIMAL, retries: 2 },
-          { name: 'gemini-4-hydrogen', thinkingLevel: ThinkingLevel.LOW, retries: 1 },
+          { name: 'gemini-4-hydrogen', thinkingLevel: ThinkingLevel.HIGH, retries: 2 },
+          { name: 'gemini-3.1-flash-lite', thinkingLevel: ThinkingLevel.MEDIUM, retries: 1 },
           { name: 'gemini-2.5-flash', retries: 2 },
         ];
 

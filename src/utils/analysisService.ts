@@ -152,12 +152,18 @@ export async function runClientForensics(
 export async function runServerAiAnalysis(
   preparedBase64: string,
   preparedMimeType: string,
-  metadata: ImageMetadata
+  metadata: ImageMetadata,
+  elaStats?: ElaStats | null
 ): Promise<AiAnalysisResponse> {
+  const baseContext = buildMetadataContextForAi(metadata);
+  const elaSummary = elaStats
+    ? `\nError Level Analysis (ELA @ Q${elaStats.quality}, ${elaStats.scale}x): Mean Residual=${elaStats.meanError}, Max Delta=${elaStats.maxError}, High-Variance Pixels=${elaStats.highVarianceRatio}%, Profile="${elaStats.uniformityAssessment}"`
+    : '';
+
   const payload = JSON.stringify({
     imageBase64: preparedBase64,
     mimeType: preparedMimeType,
-    metadataContext: buildMetadataContextForAi(metadata),
+    metadataContext: `${baseContext}${elaSummary}`,
   });
 
   let lastMessage = 'Forensic vision analysis failed. Please try again.';
