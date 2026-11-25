@@ -155,146 +155,26 @@ export async function createCompactThumbnail(imageDataUrl: string, maxDim = 360)
   return canvas.toDataURL('image/jpeg', 0.8);
 }
 
-export interface PreparedAnalysisPayload {
-  base64: string;
-  mimeType: string;
-  width: number;
-  height: number;
-  detailCropBase64?: string;
-  detailCropRegion?: [number, number, number, number];
-}
-
-function findSalientDetailCropRect(
-  img: HTMLImageElement,
-  width: number,
-  height: number,
-  cropSize: number
-): { sx: number; sy: number; sw: number; sh: number; region: [number, number, number, number] } {
-  const sw = Math.min(cropSize, width);
-  const sh = Math.min(cropSize, height);
-
-  // Fast 128px edge-energy map biased toward upper-center / subject region (faces, eyes, grilles, badges)
-  const probeScale = Math.min(1, 128 / Math.max(width, height));
-  const pw = Math.max(16, Math.round(width * probeScale));
-  const ph = Math.max(16, Math.round(height * probeScale));
-  const probeCanvas = document.createElement('canvas');
-  probeCanvas.width = pw;
-  probeCanvas.height = ph;
-  const pCtx = probeCanvas.getContext('2d', { willReadFrequently: true });
-
-  let bestCenterX = width * 0.5;
-  let bestCenterY = height * 0.42;
-
-  if (pCtx) {
-    pCtx.drawImage(img, 0, 0, pw, ph);
-    const pData = pCtx.getImageData(0, 0, pw, ph).data;
-    const grid = 8;
-    const cellW = pw / grid;
-    const cellH = ph / grid;
-    let bestScore = -1;
-
-    for (let gy = 1; gy < grid - 1; gy++) {
-      for (let gx = 1; gx < grid - 1; gx++) {
-        let energy = 0;
-        const xStart = Math.floor(gx * cellW);
-        const yStart = Math.floor(gy * cellH);
-        const xEnd = Math.min(pw - 2, Math.floor((gx + 1) * cellW));
-        const yEnd = Math.min(ph - 2, Math.floor((gy + 1) * cellH));
-        let cnt = 0;
-
-        for (let y = yStart; y < yEnd; y++) {
-          for (let x = xStart; x < xEnd; x++) {
-            const idx = (y * pw + x) * 4;
-            const rIdx = idx + 4;
-            const dIdx = idx + pw * 4;
-            const l0 = pData[idx] + pData[idx + 1] + pData[idx + 2];
-            const lr = pData[rIdx] + pData[rIdx + 1] + pData[rIdx + 2];
-            const ld = pData[dIdx] + pData[dIdx + 1] + pData[dIdx + 2];
-            energy += Math.abs(l0 - lr) + Math.abs(l0 - ld);
-            cnt++;
-          }
-        }
-        const avgEnergy = cnt > 0 ? energy / cnt : 0;
-        // Favor upper-center / center focal zones (where portraits & car fronts sit)
-        const nx = (gx + 0.5) / grid;
-        const ny = (gy + 0.5) / grid;
-        const distFromFocus = Math.hypot((nx - 0.5) * 1.15, (ny - 0.4) * 1.1);
-        const spatialWeight = Math.max(0.45, 1.25 - distFromFocus);
-        const score = avgEnergy * spatialWeight;
-        if (score > bestScore) {
-          bestScore = score;
-          bestCenterX = nx * width;
-          bestCenterY = ny * height;
-        }
-      }
-    }
-  }
-
-  const sx = Math.max(0, Math.min(width - sw, Math.round(bestCenterX - sw / 2)));
-  const sy = Math.max(0, Math.min(height - sh, Math.round(bestCenterY - sh / 2)));
-  const region: [number, number, number, number] = [
-    Math.round((sy / height) * 1000),
-    Math.round((sx / width) * 1000),
-    Math.round(((sy + sh) / height) * 1000),
-    Math.round(((sx + sw) / width) * 1000),
-  ];
-
-  return { sx, sy, sw, sh, region };
-}
-
 export async function prepareAnalysisPayload(
   imageDataUrl: string,
   mimeType: string
-): Promise<PreparedAnalysisPayload> {
+): Promise<{ base64: string; mimeType: string; width: number; height: number }> {
   const img = await loadImageElement(imageDataUrl);
   const width = img.naturalWidth;
   const height = img.naturalHeight;
 
-  // Extract a 1:1 native-resolution micro-detail crop (up to 768x768) for pixel-level visual inspection
-  let detailCropBase64: string | undefined;
-  let detailCropRegion: [number, number, number, number] | undefined;
-
-  try {
-    if (Math.max(width, height) > 880) {
-      const cropDim = Math.min(768, width, height);
-      const crop = findSalientDetailCropRect(img, width, height, cropDim);
-      const cropCanvas = document.createElement('canvas');
-      cropCanvas.width = crop.sw;
-      cropCanvas.height = crop.sh;
-      const cropCtx = cropCanvas.getContext('2d');
-      if (cropCtx) {
-        cropCtx.drawImage(img, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, crop.sw, crop.sh);
-        const cropDataUrl = cropCanvas.toDataURL('image/jpeg', 0.94);
-        const cropB64 = cropDataUrl.slice(cropDataUrl.indexOf(',') + 1);
-        if (cropB64.length <= 420_000) {
-          detailCropBase64 = cropB64;
-          detailCropRegion = crop.region;
-        }
-      }
-    }
-  } catch {
-    // Non-fatal: proceed with full-frame analysis
-  }
-
-  // Preserve fine forensic details up to 2048px while staying safely under Vercel's 4.5 MB payload limit
-  const maxDim = 2048;
-  const maxSafeBase64Chars = detailCropBase64 ? 2_800_000 : 3_300_000;
+  // Cap dimensions and base64 length cleanly so analysis stays fast and well within Vercel's 4.5 MB limit
+  const maxDim = 1800;
+  const maxSafeBase64Chars = 3_400_000;
   const commaIdx = imageDataUrl.indexOf(',');
   const rawBase64 = commaIdx >= 0 ? imageDataUrl.slice(commaIdx + 1) : imageDataUrl;
-
   const needsResize = Math.max(width, height) > maxDim || rawBase64.length > maxSafeBase64Chars;
+
   if (!needsResize) {
     const normalizedMime = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(mimeType)
       ? mimeType
       : 'image/jpeg';
-    return {
-      base64: rawBase64,
-      mimeType: normalizedMime,
-      width,
-      height,
-      detailCropBase64,
-      detailCropRegion,
-    };
+    return { base64: rawBase64, mimeType: normalizedMime, width, height };
   }
 
   const ratio = Math.min(1, maxDim / Math.max(width, height));
@@ -310,8 +190,6 @@ export async function prepareAnalysisPayload(
       mimeType: 'image/jpeg',
       width,
       height,
-      detailCropBase64,
-      detailCropRegion,
     };
   }
   ctx.imageSmoothingEnabled = true;
@@ -319,19 +197,12 @@ export async function prepareAnalysisPayload(
   ctx.drawImage(img, 0, 0, targetW, targetH);
 
   let base64 = '';
-  for (const quality of [0.92, 0.86, 0.8]) {
+  for (const quality of [0.9, 0.84, 0.78]) {
     const compressed = canvas.toDataURL('image/jpeg', quality);
     base64 = compressed.slice(compressed.indexOf(',') + 1);
     if (base64.length <= maxSafeBase64Chars) {
       break;
     }
   }
-  return {
-    base64,
-    mimeType: 'image/jpeg',
-    width,
-    height,
-    detailCropBase64,
-    detailCropRegion,
-  };
+  return { base64, mimeType: 'image/jpeg', width, height };
 }

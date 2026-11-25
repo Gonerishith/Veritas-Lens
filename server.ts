@@ -241,6 +241,9 @@ async function loadSharedReport(id: string): Promise<Record<string, unknown> | n
   }
 }
 
+let cachedGeminiKey = '';
+let cachedGeminiClient: GoogleGenAI | null = null;
+
 function getGeminiClient(): GoogleGenAI {
   const apiKey = process.env.GEMINI_API_KEY?.trim();
   if (!apiKey) {
@@ -249,14 +252,18 @@ function getGeminiClient(): GoogleGenAI {
       { statusCode: 500 }
     );
   }
-  return new GoogleGenAI({
-    apiKey,
-    httpOptions: {
-      headers: {
-        'User-Agent': 'aistudio-build',
+  if (!cachedGeminiClient || cachedGeminiKey !== apiKey) {
+    cachedGeminiKey = apiKey;
+    cachedGeminiClient = new GoogleGenAI({
+      apiKey,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        },
       },
-    },
-  });
+    });
+  }
+  return cachedGeminiClient;
 }
 
 function isPrivateIpv4(ip: string): boolean {
@@ -461,17 +468,29 @@ async function fetchImageSafely(rawUrl: string): Promise<{
 const FORENSIC_RESPONSE_SCHEMA = {
   type: Type.OBJECT,
   properties: {
-    authenticEvidence: {
-      type: Type.ARRAY,
-      description:
-        '2 to 4 concrete visual or physical observations supporting that this could be a REAL camera/smartphone photograph (e.g., coherent real-world clutter, legible brand/sign text, natural everyday candid lighting, consistent mechanical/clothing details, real smartphone HDR/bokeh/JPEG compression).',
-      items: { type: Type.STRING },
+    verdict: {
+      type: Type.STRING,
+      description: 'Overall authenticity classification: "likely_ai", "inconclusive", or "likely_real".',
     },
-    syntheticEvidence: {
-      type: Type.ARRAY,
-      description:
-        '0 to 4 concrete, specific generative AI artifacts visible in the image (e.g., garbled text/emblems, broken spoke/lug-nut symmetry, impossible jewelry/eyeglass merging, paradoxical razor-sharp edges paired with waxy diffusion skin, nonsensical melted background objects). Leave empty if no genuine AI artifacts exist.',
-      items: { type: Type.STRING },
+    aiProbability: {
+      type: Type.INTEGER,
+      description: 'Calibrated integer from 0 (definitely real photograph) to 100 (definitely AI-generated / synthetic).',
+    },
+    confidence: {
+      type: Type.STRING,
+      description: 'Analyst confidence level: "high", "medium", or "low".',
+    },
+    headline: {
+      type: Type.STRING,
+      description: 'Concise 1-sentence forensic conclusion in plain, objective English.',
+    },
+    summary: {
+      type: Type.STRING,
+      description: '2-3 sentence technical synthesis weighing both visual cues and metadata context.',
+    },
+    suspectedSource: {
+      type: Type.STRING,
+      description: 'Brief classification such as "Natural Optical Capture", "Modern Diffusion Model", "3D / CGI Rendering", "AI-Edited Photograph", or "Undetermined".',
     },
     signals: {
       type: Type.ARRAY,
@@ -496,31 +515,6 @@ const FORENSIC_RESPONSE_SCHEMA = {
         },
         required: ['id', 'name', 'status', 'score', 'observation'],
       },
-    },
-    aiProbability: {
-      type: Type.INTEGER,
-      description:
-        'Calibrated integer from 0 (definitely real camera photograph) to 100 (definitely AI-generated / CGI), weighed neutrally after comparing authenticEvidence against syntheticEvidence.',
-    },
-    verdict: {
-      type: Type.STRING,
-      description: 'Overall authenticity classification: "likely_ai", "inconclusive", or "likely_real".',
-    },
-    confidence: {
-      type: Type.STRING,
-      description: 'Analyst confidence level: "high", "medium", or "low".',
-    },
-    headline: {
-      type: Type.STRING,
-      description: 'Concise 1-sentence forensic conclusion in plain, objective English.',
-    },
-    summary: {
-      type: Type.STRING,
-      description: '2-3 sentence technical synthesis weighing both visual cues and metadata context.',
-    },
-    suspectedSource: {
-      type: Type.STRING,
-      description: 'Brief classification such as "Natural Optical Capture", "Smartphone Computational Photo", "Modern Diffusion Model", "3D / CGI Rendering", "AI-Edited Photograph", or "Undetermined".',
     },
     regions: {
       type: Type.ARRAY,
@@ -549,74 +543,35 @@ const FORENSIC_RESPONSE_SCHEMA = {
       },
     },
   },
-  propertyOrdering: [
-    'authenticEvidence',
-    'syntheticEvidence',
-    'signals',
-    'aiProbability',
-    'verdict',
-    'confidence',
-    'headline',
-    'summary',
-    'suspectedSource',
-    'regions',
-  ],
   required: [
-    'authenticEvidence',
-    'syntheticEvidence',
-    'signals',
-    'aiProbability',
     'verdict',
+    'aiProbability',
     'confidence',
     'headline',
     'summary',
     'suspectedSource',
+    'signals',
     'regions',
   ],
 };
 
-const FORENSIC_SYSTEM_INSTRUCTION = `You are a neutral, highly calibrated digital image forensic analyst. Your job is to accurately separate REAL camera/smartphone photographs from AI-generated (diffusion/GAN) images and 3D/CGI renders with BOTH low false positives (never falsely flagging real photos as AI) AND low false negatives (catching modern photorealistic AI images).
+const FORENSIC_SYSTEM_INSTRUCTION = `You are a senior digital image forensic analyst specializing in distinguishing authentic camera photographs from AI-generated (diffusion/GAN) images and CGI renders.
 
-STEP 1 — MANDATORY NEUTRAL BASELINE & REAL-WORLD PHOTOGRAPHY AWARENESS:
-Most everyday images uploaded by users are REAL smartphone or DSLR photos shared via WhatsApp, Instagram, X, Facebook, or screenshots. Before suspecting AI, remember what is 100% NORMAL in real photographs and MUST NEVER be counted as AI evidence:
-- Missing EXIF metadata (social media, messaging apps, web downloads, and screenshots ALWAYS strip EXIF from real photos).
-- Smartphone computational photography: iPhone/Pixel/Samsung/Xiaomi Portrait Mode cutout bokeh around hair/shoulders, multi-frame night denoising (smooth skin/walls/sky), HDR tone-mapping, and built-in smartphone beauty/skin-smoothing filters.
-- Social-media JPEG recompression: soft micro-detail, low noise residual, slightly mushy distant foliage or small distant text.
-- Professional DSLR / editorial photography: clean studio lighting, CPL polarizing filters on glossy cars, Lightroom/Photoshop color grading, shallow f/1.4–f/2.8 lens bokeh.
-- Everyday candid realism: slightly awkward or mundane composition, ordinary unglamorous lighting, real-world background clutter, real readable text/logos/brands, authentic clothing wrinkles, natural messy hair, and imperfect human faces/bodies.
+Evaluate the provided image objectively and carefully. Do NOT assume every image is AI-generated, and do NOT assume every photorealistic image is real. Weigh subtle physical, optical, semantic, and container-metadata cues with scientific rigor:
+1. Lighting & Shadow Physics — directionality, contact shadows, specular reflections, caustics, and multi-source shadow coherence.
+2. Anatomy, Text & Geometry — fingers, ears, eyes, symmetry, architectural straight lines, readable signage/typography, vehicle badges/wheels, and repeating structural logic.
+3. Surface Texture & Micro-Detail — organic film/sensor grain vs. overly smooth painterly diffusion skin/surfaces, repeating micro-patterns, fabric weave, hair strand termination.
+4. Background & Spatial Coherence — continuity of lines behind foreground objects, reflections matching actual geometry, perspective vanishing points, crowd/clutter coherence.
+5. Optical & Lens Characteristics — natural optical depth-of-field gradient, realistic chromatic aberration, bokeh shape physics vs. uniform synthetic blur.
+6. Noise, Grain & Compression — luminance/chroma noise continuity across focal planes, edge halos, and container/EXIF provenance clues when provided.
 
-STEP 2 — WHAT ACTUALLY SEPARATES TRUE AI GENERATION FROM REAL PHOTOS:
-List concrete evidence for BOTH sides (authenticEvidence vs. syntheticEvidence) before scoring. Look closely at Image 1 (full frame) and Image 2 (1:1 micro-detail crop, when provided):
-
-A. Strong Authentic Real-Photo Cues:
-- Everyday candid/unposed lighting, natural real-world clutter, messy/unbalanced composition, or genuine camera/lens quirks (motion blur, natural ISO grain, realistic flare).
-- Crisp, coherent, real-world readable text, signs, brand logos, manufacturer car emblems, license plates, or product packaging that hold up under close inspection.
-- Consistent fine mechanical/clothing structure: matching earrings, continuous jewelry chains, proper buttons/zippers/seams, symmetrical car wheel spokes & lug nuts, coherent brake assemblies, and physically consistent background geometry.
-- Natural human authenticity: asymmetrical facial features, authentic uneven skin texture/creases/blemishes/peach fuzz, or normal smartphone JPEG/Portrait-Mode rendering on a genuine real-world scene.
-- Verified camera EXIF/provenance tags (strong supporting cue when visual content agrees).
-
-B. Genuine AI-Generation Signatures (distinct from normal phone smoothing or JPEG compression!):
-1. Structural, Text & Mechanical Contradictions:
-   - In-focus text, signs, logos, car badges, tire sidewall text, or license plates rendered as garbled pseudo-letters/alien symbols (NOT merely out-of-focus or low-res JPEG blur).
-   - Physical geometry failures: eyeglasses/jewelry merging into skin, left vs. right earrings having totally different structures, clothing straps/seams/buttons disappearing into nothing, car spokes/lug nuts breaking rotational symmetry, mismatched front/rear wheels, panel gaps fading randomly into paint, background lines shifting angle behind a subject.
-   - Impossible reflections or warped anatomy: reflections in mirrors/glasses/car paint depicting an impossible scene, fused teeth, malformed fingers/ears/limbs.
-2. Modern Photorealistic Diffusion Signatures (Flux, Midjourney v6+, Imagen, GPT-Image — when NO gross deformity exists):
-   - Paradoxical "Hyper-Sharp + Waxy Plasticity": Unlike phone denoising or JPEG blur (which softens the whole photo evenly), AI diffusion portraits often combine razor-sharp hyper-rendered eyelashes/lips/edges with surreal, uniformly glowing airbrushed/waxy skin across face/neck/shoulders, overly luminous jewel-like irises, and ribbon-like glossy hair strands that loop impossibly or dissolve smoothly into background bokeh.
-   - Semantic Background Melting: Out-of-focus background objects (buildings, furniture, distant cars, crowds, street signs) morph into nonsensical impossible shapes rather than real optical lens blur.
-   - "Prompted Hyper-Perfection" + Localized Micro-Anomalies: Unnaturally idealized symmetrical "AI model" face + hyper-balanced cinematic rim lighting + ultra-glossy uniform aesthetic COMBINED with at least 2 concrete localized micro-anomalies (e.g., mismatched catchlights, fused chain/earring details, impossible hair loops, warped clothing weave, melted background objects, or garbled micro-text).
-
-STEP 3 — CALIBRATED SCORING DISCIPLINE:
-Weigh authenticEvidence vs. syntheticEvidence honestly BEFORE setting aiProbability (0..100):
-- Score 5..30 ("likely_real"): The scene looks like a genuine camera/smartphone photograph with real-world coherence and ZERO clear generative contradictions — EVEN IF it has no EXIF, smartphone Portrait Mode bokeh, phone beauty smoothing, JPEG compression, or professional studio lighting!
-- Score 70..96 ("likely_ai"): Clear structural/text/geometry impossibilities OR explicit AI container markers OR multiple concrete, verifiable diffusion portrait/vehicle signatures (paradoxical hyper-sharp waxy plasticity + localized micro-anomalies in eyes/hair/jewelry/emblems/background) that clearly outweigh authentic cues.
-- Score 38..62 ("inconclusive"): Evidence is genuinely split (e.g., heavily FaceTuned/Photoshopped real photo, extreme low-res thumbnail, or ambiguous studio shot with weak/conflicting cues).
-
-Output Rules:
-- Fill authenticEvidence and syntheticEvidence objectively first, then the 6 signals, then aiProbability and verdict.
-- Provide exactly 6 signals using IDs: "lighting", "anatomy_geometry", "texture", "background", "optics", "noise_compression".
-- Ensure aiProbability aligns with the 6 signals and thresholds: >= 65 => "likely_ai", 36..64 => "inconclusive", <= 35 => "likely_real".
-- Provide 2 to 5 accurate box_2d [ymin, xmin, ymax, xmax] (0..1000) regions relative to Image 1 pointing to concrete visible evidence.
-- Keep prose concise, neutral, and strictly grounded in what is actually visible.`;
+Rules:
+- Return strictly valid JSON conforming to the provided schema.
+- Provide exactly 6 signals corresponding to the 6 dimensions above (use IDs: "lighting", "anatomy_geometry", "texture", "background", "optics", "noise_compression").
+- Align verdict with aiProbability: >= 65 => "likely_ai", 36..64 => "inconclusive", <= 35 => "likely_real".
+- Provide 2 to 5 accurate bounding boxes in box_2d format [ymin, xmin, ymax, xmax] scaled 0..1000 pointing to concrete visible areas in the image (e.g., distorted signage, impossible reflection, hand/tool grip, organic dew refraction, lens bokeh transition).
+- Note that missing EXIF alone does NOT prove AI generation (social platforms and screenshots strip EXIF), though explicit AI generator chunks or authentic camera EXIF are meaningful supporting context.
+- Keep prose concise, neutral, and strictly evidence-based.`;
 
 function extractErrorStatus(err: unknown): number {
   if (typeof err === 'object' && err !== null) {
@@ -683,45 +638,8 @@ function sanitizeAnalysisPayload(raw: Record<string, unknown>) {
     };
   });
 
-  const rawAuthentic = Array.isArray(raw.authenticEvidence) ? raw.authenticEvidence.map(String) : [];
-  const rawSynthetic = Array.isArray(raw.syntheticEvidence) ? raw.syntheticEvidence.map(String) : [];
-
-  // Reconcile headline probability if it strongly contradicts the 6 channel scores
-  if (signals.length >= 4) {
-    const avgSignal =
-      signals.reduce((acc, s) => acc + s.score, 0) / signals.length;
-    const highSyntheticCount = signals.filter((s) => s.score >= 65).length;
-    const highAuthenticCount = signals.filter((s) => s.score <= 35).length;
-
-    if (highSyntheticCount >= 3 && aiProbability < avgSignal - 12) {
-      aiProbability = Math.round(aiProbability * 0.4 + avgSignal * 0.6);
-    } else if (highAuthenticCount >= 4 && aiProbability > avgSignal + 15) {
-      aiProbability = Math.round(aiProbability * 0.4 + avgSignal * 0.6);
-    } else if (Math.abs(aiProbability - avgSignal) > 22) {
-      aiProbability = Math.round(aiProbability * 0.55 + avgSignal * 0.45);
-    }
-    aiProbability = Math.max(0, Math.min(100, aiProbability));
-  }
-
-  let verdict: 'likely_ai' | 'likely_real' | 'possible_manipulation' | 'inconclusive' = 'inconclusive';
-  if (
-    raw.verdict === 'likely_ai' ||
-    raw.verdict === 'likely_real' ||
-    raw.verdict === 'possible_manipulation' ||
-    raw.verdict === 'inconclusive'
-  ) {
-    verdict = raw.verdict;
-  } else if (aiProbability >= 70) {
-    verdict = 'likely_ai';
-  } else if (aiProbability <= 30) {
-    verdict = 'likely_real';
-  } else if (aiProbability >= 40 && aiProbability <= 65 && rawSynthetic.length > 0) {
-    verdict = 'possible_manipulation';
-  } else if (aiProbability >= 65) {
-    verdict = 'likely_ai';
-  } else if (aiProbability <= 35) {
-    verdict = 'likely_real';
-  }
+  const verdict: 'likely_ai' | 'inconclusive' | 'likely_real' =
+    aiProbability >= 65 ? 'likely_ai' : aiProbability <= 35 ? 'likely_real' : 'inconclusive';
 
   const rawRegions = Array.isArray(raw.regions) ? raw.regions : [];
   const regions = rawRegions
@@ -760,8 +678,6 @@ function sanitizeAnalysisPayload(raw: Record<string, unknown>) {
     .filter((item): item is NonNullable<typeof item> => item !== null);
 
   return {
-    authenticEvidence: rawAuthentic,
-    syntheticEvidence: rawSynthetic,
     verdict,
     aiProbability,
     confidence,
@@ -867,21 +783,9 @@ function buildApiApp() {
     try {
       const imageBase64 = typeof req.body?.imageBase64 === 'string' ? req.body.imageBase64.trim() : '';
       const mimeType = typeof req.body?.mimeType === 'string' ? req.body.mimeType.trim().toLowerCase() : '';
-      const detailCropBase64 =
-        typeof req.body?.detailCropBase64 === 'string' &&
-        req.body.detailCropBase64.trim().length > 0 &&
-        req.body.detailCropBase64.trim().length <= 1_000_000
-          ? req.body.detailCropBase64.trim()
-          : '';
-      const detailCropRegion =
-        Array.isArray(req.body?.detailCropRegion) &&
-        req.body.detailCropRegion.length === 4 &&
-        req.body.detailCropRegion.every((v: unknown) => typeof v === 'number' && Number.isFinite(v))
-          ? (req.body.detailCropRegion as [number, number, number, number])
-          : null;
       const metadataContext =
         typeof req.body?.metadataContext === 'string'
-          ? req.body.metadataContext.slice(0, 3500)
+          ? req.body.metadataContext.slice(0, 2000)
           : '';
 
       if (!imageBase64 || imageBase64.length > MAX_BASE64_LENGTH) {
@@ -898,24 +802,17 @@ function buildApiApp() {
         return;
       }
 
-      const cropNotice = detailCropBase64
-        ? `TWO IMAGES ARE ATTACHED:\n- Image 1: Full-frame composition (compute all box_2d bounding-box coordinates [ymin, xmin, ymax, xmax] in 0..1000 relative to Image 1).\n- Image 2: Unscaled 1:1 native-resolution micro-detail crop from Image 1 region ${detailCropRegion ? `[${detailCropRegion.join(', ')}]` : 'around the primary subject'} for crisp inspection of fine texture, text, edges, and optics.`
-        : 'Inspect the full image carefully for both authentic photographic cues and any genuine generative AI artifacts.';
-
       const promptParts = [
-        'Perform an objective, neutrally calibrated digital forensic examination of this image to determine whether it is a real camera/smartphone photograph or an AI-generated/CGI image.',
-        cropNotice,
-        'Weigh authenticEvidence (real-world coherence, natural everyday lighting/imperfections, readable text/logos, normal smartphone HDR/Portrait-Mode/JPEG artifacts) fairly against syntheticEvidence (concrete generative contradictions, garbled text/emblems, impossible geometry, or paradoxical hyper-sharp + waxy diffusion texture with localized micro-anomalies). Do NOT penalize ordinary real photos for lacking EXIF, having phone smoothing/bokeh, or social-media compression.',
+        'Perform a thorough digital forensic authenticity analysis of this image to determine whether it is AI-generated/synthetic or a real camera photograph.',
+        'Inspect lighting physics, geometry/anatomy/text legibility, micro-textures, background coherence, optical bokeh/lens behavior, and noise/compression uniformity.',
         metadataContext
-          ? `Client-side container, EXIF & ELA summary:\n${metadataContext}`
-          : 'No camera EXIF metadata was present in the file container (normal for social media downloads and screenshots).',
-        'Return the complete structured JSON forensic report with authenticEvidence, syntheticEvidence, all 6 signals, calibrated aiProbability, verdict, and 2-5 localized bounding boxes relative to Image 1.',
+          ? `Client-side container & EXIF inspection summary:\n${metadataContext}`
+          : 'No camera EXIF metadata was present in the file container.',
+        'Return the complete structured JSON forensic report with 6 signals and 2-5 localized bounding boxes.',
       ].join('\n\n');
 
       const startedAt = Date.now();
-      console.log(
-        `[api/analyze] start mime=${mimeType} base64Len=${imageBase64.length} detailCrop=${Boolean(detailCropBase64)}`
-      );
+      console.log(`[api/analyze] start mime=${mimeType} base64Len=${imageBase64.length}`);
 
       let rawText = '';
       let lastModelErr: unknown = null;
@@ -932,26 +829,6 @@ function buildApiApp() {
         return;
       }
 
-      const geminiParts: Array<
-        { inlineData: { mimeType: string; data: string } } | { text: string }
-      > = [
-        {
-          inlineData: {
-            mimeType,
-            data: imageBase64,
-          },
-        },
-      ];
-      if (detailCropBase64) {
-        geminiParts.push({
-          inlineData: {
-            mimeType: 'image/jpeg',
-            data: detailCropBase64,
-          },
-        });
-      }
-      geminiParts.push({ text: promptParts });
-
       if (hasGeminiKey) {
         const ai = getGeminiClient();
         const candidateModels: {
@@ -959,8 +836,8 @@ function buildApiApp() {
           thinkingLevel?: ThinkingLevel;
           retries: number;
         }[] = [
-          { name: 'gemini-4-hydrogen', thinkingLevel: ThinkingLevel.HIGH, retries: 2 },
-          { name: 'gemini-3.1-flash-lite', thinkingLevel: ThinkingLevel.MEDIUM, retries: 1 },
+          { name: 'gemini-4-hydrogen', thinkingLevel: ThinkingLevel.MEDIUM, retries: 2 },
+          { name: 'gemini-3.1-flash-lite', thinkingLevel: ThinkingLevel.LOW, retries: 1 },
           { name: 'gemini-2.5-flash', retries: 2 },
         ];
 
@@ -974,7 +851,17 @@ function buildApiApp() {
                 ai.models.generateContent({
                   model: candidate.name,
                   contents: {
-                    parts: geminiParts,
+                    parts: [
+                      {
+                        inlineData: {
+                          mimeType,
+                          data: imageBase64,
+                        },
+                      },
+                      {
+                        text: promptParts,
+                      },
+                    ],
                   },
                   config: {
                     systemInstruction: FORENSIC_SYSTEM_INSTRUCTION,
@@ -1015,24 +902,9 @@ function buildApiApp() {
       // Optional server-side OpenRouter fallback if configured in Settings > Secrets
       if (!rawText && process.env.OPENROUTER_API_KEY?.trim()) {
         usedModel = 'openrouter:google/gemini-2.5-flash';
-        const openRouterContent: Array<
-          { type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } }
-        > = [
-          { type: 'text', text: promptParts },
-          {
-            type: 'image_url',
-            image_url: { url: `data:${mimeType};base64,${imageBase64}` },
-          },
-        ];
-        if (detailCropBase64) {
-          openRouterContent.push({
-            type: 'image_url',
-            image_url: { url: `data:image/jpeg;base64,${detailCropBase64}` },
-          });
-        }
         const orRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
           method: 'POST',
-          signal: AbortSignal.timeout(35000),
+          signal: AbortSignal.timeout(30000),
           headers: {
             Authorization: `Bearer ${process.env.OPENROUTER_API_KEY.trim()}`,
             'Content-Type': 'application/json',
@@ -1045,7 +917,13 @@ function buildApiApp() {
               { role: 'system', content: FORENSIC_SYSTEM_INSTRUCTION },
               {
                 role: 'user',
-                content: openRouterContent,
+                content: [
+                  { type: 'text', text: promptParts },
+                  {
+                    type: 'image_url',
+                    image_url: { url: `data:${mimeType};base64,${imageBase64}` },
+                  },
+                ],
               },
             ],
           }),

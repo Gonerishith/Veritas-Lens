@@ -289,12 +289,7 @@ export default function App() {
       const aiRes = await runServerAiAnalysis(
         clientRes.preparedBase64,
         clientRes.preparedMimeType,
-        clientRes.metadata,
-        clientRes.elaStats,
-        {
-          detailCropBase64: clientRes.detailCropBase64,
-          detailCropRegion: clientRes.detailCropRegion,
-        }
+        clientRes.metadata
       );
       if (seq !== scanSequenceRef.current) return;
 
@@ -463,12 +458,7 @@ export default function App() {
       const aiRes = await runServerAiAnalysis(
         clientRes.preparedBase64,
         clientRes.preparedMimeType,
-        clientRes.metadata,
-        clientRes.elaStats,
-        {
-          detailCropBase64: clientRes.detailCropBase64,
-          detailCropRegion: clientRes.detailCropRegion,
-        }
+        clientRes.metadata
       );
       const report = assembleForensicReport(asset, clientRes, aiRes);
 
@@ -665,12 +655,7 @@ export default function App() {
           const aiRes = await runServerAiAnalysis(
             clientRes.preparedBase64,
             clientRes.preparedMimeType,
-            clientRes.metadata,
-            clientRes.elaStats,
-            {
-              detailCropBase64: clientRes.detailCropBase64,
-              detailCropRegion: clientRes.detailCropRegion,
-            }
+            clientRes.metadata
           );
           if (batchRunIdRef.current !== runId) return;
 

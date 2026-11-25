@@ -548,53 +548,6 @@ export function ReportInspector({
           </div>
         </div>
 
-        {/* Granular Confidence Score Breakdown */}
-        <div className="mt-4 rounded-xl border border-slate-200/90 bg-white/80 p-4 dark:border-slate-800 dark:bg-slate-900/60">
-          <div className="flex items-center justify-between">
-            <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-              Granular Confidence Breakdown
-            </h4>
-            <span className="font-mono text-[11px] text-slate-400">Multi-Channel Weights</span>
-          </div>
-          <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
-            {(() => {
-              const findScore = (id: string, fallback: number) => {
-                const s = effectiveReport?.signals.find((sig) => sig.id === id);
-                return s ? s.score : fallback;
-              };
-              const artifactScore = findScore('texture', aiScore);
-              const neuralScore = findScore('noise_compression', Math.min(100, aiScore + 3));
-              const lightingScore = findScore('lighting', aiScore);
-              const metaScore = metadata?.hasExif ? 90 : metadata?.aiMarkerDetected ? 15 : 75;
-
-              const metrics = [
-                { label: 'Artifact Presence', score: artifactScore, desc: 'Texture & micro-detail consistency' },
-                { label: 'Neural Signature', score: neuralScore, desc: 'Noise floor & compression residuals' },
-                { label: 'Lighting & Geometry', score: lightingScore, desc: 'Illumination, shadows & perspective' },
-                { label: 'Metadata Consistency', score: metaScore, desc: 'EXIF & container provenance check' },
-              ];
-
-              return metrics.map((m) => (
-                <div key={m.label} className="rounded-lg border border-slate-100 bg-slate-50/70 p-3 dark:border-slate-800 dark:bg-slate-950/60">
-                  <div className="flex items-baseline justify-between text-xs">
-                    <span className="font-medium text-slate-800 dark:text-slate-200">{m.label}</span>
-                    <span className="font-mono font-bold text-slate-900 dark:text-slate-100">{m.score}%</span>
-                  </div>
-                  <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
-                    <div
-                      style={{ width: `${m.score}%` }}
-                      className={`h-full rounded-full ${
-                        m.score >= 65 ? 'bg-red-600 dark:bg-red-500' : m.score <= 35 ? 'bg-emerald-600 dark:bg-emerald-500' : 'bg-amber-500 dark:bg-amber-400'
-                      }`}
-                    />
-                  </div>
-                  <p className="mt-1.5 text-[11px] text-slate-500 dark:text-slate-400">{m.desc}</p>
-                </div>
-              ));
-            })()}
-          </div>
-        </div>
-
         {/* Dynamic Sensitivity Threshold Slider */}
         <div className="mt-3.5 border-t border-slate-200/70 pt-3.5 dark:border-slate-800/80">
           <div className="flex items-center justify-between gap-2 text-xs">

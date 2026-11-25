@@ -72,10 +72,7 @@ export function sanitizeSharedPayload(raw: unknown): SharedReportPayload | null 
   const aiThreshold = clampInt(obj.aiThreshold, 30, 90, 65);
 
   const verdict: VerdictType =
-    r.verdict === 'likely_ai' ||
-    r.verdict === 'likely_real' ||
-    r.verdict === 'possible_manipulation' ||
-    r.verdict === 'inconclusive'
+    r.verdict === 'likely_ai' || r.verdict === 'inconclusive' || r.verdict === 'likely_real'
       ? r.verdict
       : aiProbability >= aiThreshold
         ? 'likely_ai'

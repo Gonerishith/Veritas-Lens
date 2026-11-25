@@ -49,8 +49,7 @@ interface BatchViewProps {
 }
 
 const VERDICT_RANK: Record<VerdictType, number> = {
-  likely_ai: 4,
-  possible_manipulation: 3,
+  likely_ai: 3,
   inconclusive: 2,
   likely_real: 1,
 };
@@ -86,7 +85,6 @@ export function BatchView({
     const failed = items.filter((i) => i.status === 'error').length;
 
     const likelyAi = completed.filter((i) => i.report?.verdict === 'likely_ai').length;
-    const possibleManipulation = completed.filter((i) => i.report?.verdict === 'possible_manipulation').length;
     const inconclusive = completed.filter((i) => i.report?.verdict === 'inconclusive').length;
     const likelyReal = completed.filter((i) => i.report?.verdict === 'likely_real').length;
     const withExif = completed.filter((i) => i.metadata?.hasExif).length;
@@ -104,7 +102,6 @@ export function BatchView({
       analyzing,
       failed,
       likelyAi,
-      possibleManipulation,
       inconclusive,
       likelyReal,
       withExif,
